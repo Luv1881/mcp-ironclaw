@@ -1,0 +1,138 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aggregator
+  namespace: ironclaw
+  labels:
+    app.kubernetes.io/name: aggregator
+    app.kubernetes.io/part-of: ironclaw
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aggregator
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aggregator
+        app.kubernetes.io/part-of: ironclaw
+    spec:
+      serviceAccountName: ironclaw-aggregator
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: aggregator
+      containers:
+        - name: aggregator
+          image: ironclaw/mcp-server:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - -headless
+            - -health-addr=:8080
+            - -devices=1
+            - -events=1
+            - -window=$(WINDOW_SIZE)
+            - -kafka=$(KAFKA_BROKERS)
+            - -redis=$(REDIS_ADDR)
+            - -postgres=$(POSTGRES_DSN)
+            - -topic-prefix=$(TOPIC_PREFIX)
+          env:
+            - name: WINDOW_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: ironclaw-config
+                  key: windowSize
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: ironclaw-config
+                  key: kafkaBrokers
+            - name: REDIS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: ironclaw-config
+                  key: redisAddr
+            - name: TOPIC_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: ironclaw-config
+                  key: topicPrefix
+            - name: POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: ironclaw-postgres
+                  key: dsn
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "4"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aggregator
+  namespace: ironclaw
+  labels:
+    app.kubernetes.io/name: aggregator
+    app.kubernetes.io/part-of: ironclaw
+spec:
+  selector:
+    app.kubernetes.io/name: aggregator
+  ports:
+    - name: health
+      port: 8080
+      targetPort: health
+      protocol: TCP
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: aggregator
+  namespace: ironclaw
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aggregator

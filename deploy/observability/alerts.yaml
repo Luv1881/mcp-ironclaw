@@ -1,0 +1,200 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ironclaw-slo
+  namespace: ironclaw
+  labels:
+    app.kubernetes.io/name: ironclaw
+    app.kubernetes.io/part-of: ironclaw
+    role: alert-rules
+spec:
+  groups:
+    - name: ironclaw.ingest.slo
+      interval: 30s
+      rules:
+        - record: ironclaw:ingest_requests:rate5m
+          expr: |
+            sum(rate(ironclaw_http_ingest_accepted_total[5m]))
+              + sum(rate(ironclaw_http_ingest_rejected_total[5m]))
+              + sum(rate(ironclaw_http_ingest_unauthenticated_total[5m]))
+
+        - record: ironclaw:ingest_failure_ratio:rate5m
+          expr: |
+            (
+              sum(rate(ironclaw_http_ingest_rejected_total[5m]))
+                + sum(rate(ironclaw_http_ingest_unauthenticated_total[5m]))
+            )
+            / clamp_min(ironclaw:ingest_requests:rate5m, 1)
+
+        - alert: IngestErrorBudgetBurningFast
+          expr: ironclaw:ingest_failure_ratio:rate5m > 0.0075
+          for: 5m
+          labels:
+            severity: page
+            slo: ingest-availability
+          annotations:
+            summary: Ingest is burning its 99.95% error budget 15x faster than sustainable
+            description: >-
+              The 99.95% monthly objective allows a 0.05% failure ratio. A sustained 0.75%
+              consumes the entire month's ~21 minute budget in under two days. Measured
+              baseline under load was 0.05% (2 connection resets in 3,765 batches).
+            runbook: docs/availability.md#measured-results
+
+        - alert: IngestErrorBudgetBurningSlow
+          expr: ironclaw:ingest_failure_ratio:rate5m > 0.001
+          for: 1h
+          labels:
+            severity: ticket
+            slo: ingest-availability
+          annotations:
+            summary: Ingest failure ratio is above its measured baseline for an hour
+            description: >-
+              0.1% is twice the 99.95% objective and 20x the measured baseline. Not urgent,
+              but it will exhaust the budget over a month if it persists.
+
+        - alert: IngestUnauthenticatedSpike
+          expr: sum(rate(ironclaw_http_ingest_unauthenticated_total[5m])) > 1
+          for: 10m
+          labels:
+            severity: page
+            category: security
+          annotations:
+            summary: Sustained unauthenticated requests reaching ingest
+            description: >-
+              Ingest only accepts requests carrying an edge-set device identity and an
+              allowlisted client CN. A sustained rate means either the edge is misconfigured
+              or something is talking to ingest directly.
+
+    - name: ironclaw.freshness.slo
+      interval: 30s
+      rules:
+        - alert: AggregatorConsumerLagBreachingFreshness
+          expr: |
+            sum(kafka_consumergroup_lag{consumergroup="ironclaw.events.raw.aggregators"})
+              / clamp_min(sum(rate(ironclaw_aggregator_batches_consumed_total[5m])), 1) > 5
+          for: 5m
+          labels:
+            severity: page
+            slo: freshness
+          annotations:
+            summary: Aggregator backlog exceeds the 5 second freshness SLO
+            description: >-
+              Lag divided by consumption rate is the time to drain. Above 5 s the end-to-end
+              freshness objective (p99 < 5 s) is already breached for the newest events.
+              Measured drain after a 40 s load run was ~45 s, so a sustained breach here means
+              the tier is under-scaled, not merely catching up.
+            runbook: docs/availability.md#chaos-and-slo-results
+
+        - alert: WindowEmissionStalled
+          expr: |
+            sum(rate(ironclaw_aggregator_batches_consumed_total[10m])) > 0
+              and sum(rate(ironclaw_aggregator_windows_emitted_total[10m])) == 0
+          for: 10m
+          labels:
+            severity: page
+            slo: freshness
+          annotations:
+            summary: The aggregator is consuming batches but emitting no windows
+            description: >-
+              Events are flowing in and nothing is coming out, so Redis is going stale while
+              looking healthy. Check window rollover and the two-phase collect/commit path.
+
+        - alert: WindowsRetainedAfterFailedEmit
+          expr: sum(rate(ironclaw_aggregator_windows_retained_total[10m])) > 0
+          for: 15m
+          labels:
+            severity: ticket
+          annotations:
+            summary: Windows are repeatedly retained instead of published
+            description: >-
+              Retention is the two-phase emitter doing its job — a publish failed and the
+              windows were kept rather than destroyed. Sustained retention means the publish
+              path is broken, not merely flaky.
+
+        - alert: HotStateWritesStopped
+          expr: |
+            sum(rate(ironclaw_aggregator_windows_emitted_total[10m])) > 0
+              and sum(rate(ironclaw_windows_applied_total[10m])) == 0
+          for: 10m
+          labels:
+            severity: page
+            slo: freshness
+          annotations:
+            summary: Windows are emitted but nothing is reaching Redis
+            description: >-
+              The hot-state consumer group is not applying. The MCP read path will serve
+              increasingly stale data while every upstream metric looks healthy.
+
+    - name: ironclaw.pipeline.health
+      interval: 30s
+      rules:
+        - alert: DeadLetterRateNonZero
+          expr: sum(rate(ironclaw_kafka_dead_letter_total[15m])) > 0
+          for: 15m
+          labels:
+            severity: ticket
+          annotations:
+            summary: Messages are being dead-lettered
+            description: >-
+              Poison messages are being parked after exhausting retries. Steady-state should
+              be zero; investigate the DLQ contents before retention drops them.
+
+        - alert: RuntimeStageFailing
+          expr: sum(rate(ironclaw_runtime_stage_failures_total[10m])) > 0
+          for: 10m
+          labels:
+            severity: page
+          annotations:
+            summary: A pipeline stage is failing repeatedly
+            description: >-
+              This counter exists because consumer goroutines used to swallow their errors
+              entirely. A non-zero rate means a stage is dying and being restarted.
+
+        - alert: AgentSpoolingToDisk
+          expr: sum(rate(ironclaw_agent_batches_spooled_total[10m])) > 0
+          for: 10m
+          labels:
+            severity: ticket
+          annotations:
+            summary: Agents are spooling to disk instead of shipping
+            description: >-
+              This is the designed degradation for an edge outage and is not data loss on its
+              own. It becomes loss if the spool hits its byte budget — watch
+              ironclaw_agent_batches_drained_total recovering once the edge returns.
+
+        - alert: AgentSpoolDroppingBatches
+          expr: sum(rate(ironclaw_agent_spool_dropped_total[10m])) > 0
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: The agent disk spool is full and dropping the oldest batches
+            description: This is real, unrecoverable telemetry loss. The outage has outlasted the spool budget.
+
+        - alert: WatchUpdatesDropped
+          expr: sum(rate(ironclaw_watch_updates_dropped_total[10m])) > 0
+          for: 15m
+          labels:
+            severity: ticket
+          annotations:
+            summary: Device watch notifications are being dropped for slow subscribers
+            description: >-
+              Notification is deliberately non-blocking so a slow MCP client cannot stall the
+              apply path. Dropped updates mean watchers miss intermediate states; the next
+              call still returns current state, so this is a latency symptom, not data loss.
+
+        - alert: PostgresArchiveFallingBehindRedis
+          expr: |
+            (
+              sum(rate(ironclaw_windows_applied_total[15m]))
+                - sum(rate(ironclaw_postgres_windows_persisted_total[15m]))
+            ) > 0.1 * sum(rate(ironclaw_windows_applied_total[15m]))
+          for: 30m
+          labels:
+            severity: ticket
+          annotations:
+            summary: The durable archive is more than 10% behind the hot cache
+            description: >-
+              Redis and Postgres are independent consumer groups by design, so divergence is
+              expected briefly. A sustained gap means the archive group is stuck, and the
+              Redis rebuild path depends on Kafka retention rather than the archive.

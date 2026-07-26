@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ironclaw
+
+resources:
+  - 00-namespace.yaml
+  - 02-config.yaml
+  - 10-ingest.yaml
+  - 20-aggregator.yaml
+  - 30-edge.yaml
+  - 40-networkpolicy.yaml

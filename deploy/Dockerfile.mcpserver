@@ -1,0 +1,9 @@
+FROM alpine:3.20
+
+RUN adduser -D -u 10001 ironclaw
+
+COPY build/mcp-server-linux-amd64 /usr/local/bin/mcp-server
+
+USER ironclaw
+
+ENTRYPOINT ["/usr/local/bin/mcp-server"]

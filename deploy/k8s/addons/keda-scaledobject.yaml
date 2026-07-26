@@ -1,0 +1,54 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: aggregator
+  namespace: ironclaw
+  labels:
+    app.kubernetes.io/name: aggregator
+    app.kubernetes.io/part-of: ironclaw
+spec:
+  scaleTargetRef:
+    name: aggregator
+  minReplicaCount: 2
+  maxReplicaCount: 96
+  pollingInterval: 15
+  cooldownPeriod: 300
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 30
+        scaleDown:
+          stabilizationWindowSeconds: 300
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka:9092
+        consumerGroup: ironclaw.events.raw.aggregators
+        topic: ironclaw.events.raw
+        lagThreshold: "10000"
+        offsetResetPolicy: earliest
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: persister
+  namespace: ironclaw
+  labels:
+    app.kubernetes.io/name: aggregator
+    app.kubernetes.io/part-of: ironclaw
+spec:
+  scaleTargetRef:
+    name: aggregator
+  minReplicaCount: 2
+  maxReplicaCount: 48
+  pollingInterval: 15
+  cooldownPeriod: 300
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka:9092
+        consumerGroup: ironclaw.events.aggregated.hot-state
+        topic: ironclaw.events.aggregated
+        lagThreshold: "5000"
+        offsetResetPolicy: earliest

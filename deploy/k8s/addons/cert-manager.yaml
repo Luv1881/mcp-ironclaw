@@ -1,0 +1,54 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: ironclaw-ca
+  namespace: ironclaw
+spec:
+  ca:
+    secretName: ironclaw-ca-keypair
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ironclaw-edge-tls
+  namespace: ironclaw
+spec:
+  secretName: ironclaw-edge-tls
+  duration: 720h
+  renewBefore: 240h
+  commonName: edge.ironclaw.internal
+  dnsNames:
+    - edge.ironclaw.internal
+  usages:
+    - server auth
+    - client auth
+  privateKey:
+    algorithm: RSA
+    size: 2048
+    rotationPolicy: Always
+  issuerRef:
+    name: ironclaw-ca
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ironclaw-ingest-tls
+  namespace: ironclaw
+spec:
+  secretName: ironclaw-ingest-tls
+  duration: 720h
+  renewBefore: 240h
+  commonName: ingest.ironclaw.internal
+  dnsNames:
+    - ingest.ironclaw.internal
+    - ingest.ironclaw.svc.cluster.local
+  usages:
+    - server auth
+  privateKey:
+    algorithm: RSA
+    size: 2048
+    rotationPolicy: Always
+  issuerRef:
+    name: ironclaw-ca
+    kind: Issuer

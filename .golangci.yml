@@ -1,0 +1,81 @@
+version: "2"
+
+run:
+  timeout: 5m
+  build-tags:
+    - ebpf
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - contextcheck
+    - errorlint
+    - copyloopvar
+    - gosec
+    - misspell
+    - nilerr
+    - noctx
+    - prealloc
+    - revive
+    - unconvert
+    - wastedassign
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+    gosec:
+      excludes:
+        - G404
+    revive:
+      rules:
+        - name: package-comments
+          disabled: true
+        - name: exported
+          disabled: true
+
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go$
+        linters:
+          - errcheck
+          - gosec
+          - noctx
+          - prealloc
+
+      - path: internal/testenv/
+        linters:
+          - errcheck
+          - noctx
+
+      - linters: [errcheck]
+        source: '^\s*defer .*\.Close\(\)$'
+
+      - linters: [errcheck]
+        source: '\.(Shutdown|Write)\('
+
+      - linters: [errcheck]
+        source: '(client|pool|conn)\.Close\(\)'
+
+      - path: internal/ebpf/
+        linters:
+          - errcheck
+          - gosec
+
+      - linters: [gosec]
+        text: 'G402'
+        source: 'InsecureSkipVerify: s\.InsecureSkipVerify'
+
+      - linters: [gosec]
+        text: 'G304'
+
+      - linters: [nilerr]
+        path: internal/mcpserver/server.go
+
+      - linters: [contextcheck]
+        path: internal/redisstore/(store|watch)\.go
+
+formatters:
+  enable:
+    - gofmt

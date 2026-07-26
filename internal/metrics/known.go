@@ -1,0 +1,36 @@
+package metrics
+
+func KnownCounters() []string {
+	return []string{
+		"agent_batches_sent",
+		"agent_batches_spooled",
+		"agent_batches_drained",
+		"agent_spool_dropped",
+		"http_ingest_accepted",
+		"http_ingest_rejected",
+		"http_ingest_unauthenticated",
+		"ingest_batches_accepted",
+		"ingest_batches_rejected",
+		"ingest_events_accepted",
+		"kafka_published",
+		"kafka_consumed",
+		"kafka_retried",
+		"kafka_dead_letter",
+		"aggregator_batches_consumed",
+		"aggregator_windows_emitted",
+		"aggregator_windows_retained",
+		"persister_windows_persisted",
+		"postgres_windows_persisted",
+		"postgres_windows_duplicate",
+		"windows_applied",
+		"windows_duplicate",
+		"events_counted",
+		"errors_counted",
+		"device_resets",
+		"commands_applied",
+		"commands_rejected",
+		"watch_updates_dropped",
+		"consumer_handler_errors",
+		"runtime_stage_failures",
+	}
+}

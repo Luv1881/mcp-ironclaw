@@ -1,0 +1,185 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingest
+  namespace: ironclaw
+  labels:
+    app.kubernetes.io/name: ingest
+    app.kubernetes.io/part-of: ironclaw
+spec:
+  replicas: 3
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ingest
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ingest
+        app.kubernetes.io/part-of: ironclaw
+    spec:
+      serviceAccountName: ironclaw-ingest
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingest
+      containers:
+        - name: ingest
+          image: ironclaw/ingest:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - -addr=:8443
+            - -cert=/etc/ironclaw/tls/tls.crt
+            - -key=/etc/ironclaw/tls/tls.key
+            - -client-ca=/etc/ironclaw/tls/ca.crt
+            - -allowed-client-cn=$(EDGE_CN)
+            - -kafka=$(KAFKA_BROKERS)
+            - -topic=$(KAFKA_TOPIC)
+            - -redis=$(REDIS_ADDR)
+            - -health-addr=:8080
+          env:
+            - name: IRONCLAW_POD_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: EDGE_CN
+              valueFrom:
+                configMapKeyRef:
+                  name: ironclaw-config
+                  key: edgeCommonName
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: ironclaw-config
+                  key: kafkaBrokers
+            - name: KAFKA_TOPIC
+              valueFrom:
+                configMapKeyRef:
+                  name: ironclaw-config
+                  key: rawTopic
+            - name: REDIS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: ironclaw-config
+                  key: redisAddr
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/ironclaw/tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: ironclaw-ingest-tls
+            defaultMode: 0440
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingest
+  namespace: ironclaw
+  labels:
+    app.kubernetes.io/name: ingest
+    app.kubernetes.io/part-of: ironclaw
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    app.kubernetes.io/name: ingest
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+      protocol: TCP
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ingest
+  namespace: ironclaw
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ingest
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ingest
+  namespace: ironclaw
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ingest
+  minReplicas: 3
+  maxReplicas: 50
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60

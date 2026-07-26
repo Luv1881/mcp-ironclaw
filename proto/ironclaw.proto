@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package ironclaw.v1;
+
+option go_package = "github.com/ironclaw/mcp-ironclaw/internal/wire/ironclawpb";
+
+message Event {
+  string device_id = 1;
+  string user_id = 2;
+  int32 process_id = 3;
+  string pod_id = 4;
+  uint32 kind = 5;
+  int64 observed_at_unix_nanos = 6;
+  int64 latency_nanos = 7;
+  int64 bytes = 8;
+  bool failed = 9;
+}
+
+message Batch {
+  string device_id = 1;
+  int64 created_at_unix_nanos = 2;
+  repeated Event events = 3;
+}
+
+message AggregateWindow {
+  string user_id = 1;
+  string device_id = 2;
+  int32 process_id = 3;
+  string pod_id = 4;
+  int64 window_id = 5;
+  int64 sequence = 6;
+  int64 window_start_unix_nanos = 7;
+  int64 window_end_unix_nanos = 8;
+  int64 count = 9;
+  int64 error_count = 10;
+  int64 bytes = 11;
+  int64 p95_nanos = 12;
+  int64 p99_nanos = 13;
+  int64 max_nanos = 14;
+}

@@ -1,0 +1,71 @@
+name: ironclaw-ha
+
+x-broker: &broker
+  image: apache/kafka:3.9.0
+  environment: &broker-env
+    KAFKA_PROCESS_ROLES: broker,controller
+    KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
+    KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+    KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+    KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+    KAFKA_MIN_INSYNC_REPLICAS: 2
+    KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    KAFKA_NUM_PARTITIONS: 8
+    KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    KAFKA_UNCLEAN_LEADER_ELECTION_ENABLE: "false"
+  healthcheck:
+    test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+    interval: 5s
+    timeout: 10s
+    retries: 40
+    start_period: 20s
+
+services:
+  kafka1:
+    <<: *broker
+    container_name: ironclaw-ha-kafka1
+    ports:
+      - "29092:29092"
+    environment:
+      <<: *broker-env
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:9092,HOST://localhost:29092
+
+  kafka2:
+    <<: *broker
+    container_name: ironclaw-ha-kafka2
+    ports:
+      - "29093:29093"
+    environment:
+      <<: *broker-env
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:9092,HOST://localhost:29093
+
+  kafka3:
+    <<: *broker
+    container_name: ironclaw-ha-kafka3
+    ports:
+      - "29094:29094"
+    environment:
+      <<: *broker-env
+      KAFKA_NODE_ID: 3
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:29094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:9092,HOST://localhost:29094
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: ironclaw-ha-redis
+    ports:
+      - "26379:6379"
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
