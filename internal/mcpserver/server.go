@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -48,12 +49,39 @@ func wrap[In, Out any](handler func(context.Context, In) (Out, error)) mcp.ToolH
 	return func(ctx context.Context, _ *mcp.CallToolRequest, input In) (*mcp.CallToolResult, Out, error) {
 		output, err := handler(ctx, input)
 		if err != nil {
-			var zero Out
 			return &mcp.CallToolResult{
 				IsError: true,
 				Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
-			}, zero, nil
+			}, schemaZero[Out](), nil
 		}
 		return nil, output, nil
 	}
+}
+
+func schemaZero[Out any]() Out {
+	var zero Out
+
+	value := reflect.ValueOf(&zero).Elem()
+	if value.Kind() != reflect.Struct {
+		return zero
+	}
+
+	for i := 0; i < value.NumField(); i++ {
+		field := value.Field(i)
+		if !field.CanSet() {
+			continue
+		}
+		switch field.Kind() {
+		case reflect.Map:
+			if field.IsNil() {
+				field.Set(reflect.MakeMap(field.Type()))
+			}
+		case reflect.Slice:
+			if field.IsNil() {
+				field.Set(reflect.MakeSlice(field.Type(), 0, 0))
+			}
+		}
+	}
+
+	return zero
 }
