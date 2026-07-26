@@ -11,7 +11,7 @@ PKI_DIR ?= deploy/pki/out
 .PHONY: all build test race cover vet fmt fmt-check bpf bpf-build lint clean run \
         infra-up infra-down infra-logs integration pki pki-force haproxy-check mtls-test \
         edge-image edge-up edge-down edge-test keystore loadtest \
-        images k8s-validate k8s-up k8s-down k8s-status tf-validate \
+        images k8s-validate k8s-up k8s-down k8s-status tf-validate ironclaw-verify \
         freshness chaos-up chaos-down chaos-broker-kill lint agent
 
 all: fmt-check vet lint test
@@ -79,6 +79,11 @@ haproxy-check: pki
 
 mtls-test: pki
 	PKI_DIR=$(CURDIR)/$(PKI_DIR) DOCKER="$(DOCKER)" ./deploy/verify-mtls.sh
+
+ironclaw-verify: pki
+	mkdir -p bin
+	$(GO) build -o bin/mcp-server ./mcp-server
+	./deploy/verify-ironclaw-integration.sh
 
 edge-image:
 	mkdir -p deploy/build

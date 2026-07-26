@@ -1,0 +1,27 @@
+schema_version = "reborn.extension_manifest.v3"
+id = "ironclaw-telemetry"
+name = "IronClaw Device Telemetry"
+version = "0.1.0"
+description = "Read-mostly device telemetry from the IronClaw pipeline: per-device event counters, error counts, p95/p99 syscall latency, a live watch that blocks until a device changes, and fleet-wide pipeline metrics."
+trust = "third_party"
+
+[mcp]
+origin_gate_matrix = { loop_run = "gated_unless_granted", product = "forbidden", automation = "forbidden" }
+server = "https://ironclaw-telemetry.internal/mcp"
+namespace = "ironclaw-telemetry"
+max_tools = 16
+default_permission = "ask"
+effects = ["network", "use_secret"]
+
+[[mcp.credentials]]
+handle = "ironclaw_telemetry_token"
+vendor = "ironclaw-telemetry"
+scopes = []
+injection = { type = "header", name = "authorization", prefix = "Bearer " }
+
+[auth.ironclaw-telemetry]
+method = "api_key"
+display_name = "IronClaw telemetry bearer token"
+fields = [
+  { handle = "ironclaw_telemetry_token", label = "Bearer token", secret = true },
+]
