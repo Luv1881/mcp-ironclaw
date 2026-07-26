@@ -2,6 +2,8 @@
 
 An event-driven device telemetry pipeline in Go, exposed to LLM clients through a [Model Context Protocol](https://modelcontextprotocol.io) server.
 
+It is designed to be consumed by [IronClaw](https://github.com/nearai/ironclaw), the Rust agent OS, which connects to MCP servers for capabilities. MCP is a wire protocol, so the integration is one extension manifest and an HTTPS endpoint — see [`docs/ironclaw-integration.md`](docs/ironclaw-integration.md). Any other MCP client works equally well.
+
 An eBPF agent captures kernel telemetry on-premise and ships it over mTLS through HAProxy to a cloud ingest tier. Events flow through Kafka into an aggregator that maintains per-process counters and DDSketch latency percentiles over tumbling windows. Two independent consumer groups fan the aggregates out — one to Redis as the hot read path, one to Postgres as the durable archive. The MCP server reads Redis and serves device state to an LLM client as tools.
 
 The design target is **1,000,000 concurrent devices**; `docs/capacity.md` shows the arithmetic and where the current defaults fall short of it.
@@ -72,8 +74,8 @@ Serve over stdio (default) or streamable HTTP with mTLS and bearer tokens:
 
 ```bash
 ./bin/mcp-server -http-addr :8443 -require-auth \
-                 -tls-cert edge.crt -tls-key edge.key -client-ca ca.crt \
-                 -static-tokens 'sometoken:user-000:ironclaw:admin'
+                 -tls-cert edge.crt -tls-key edge.key -tls-client-ca ca.crt \
+                 -tokens 'sometoken:user-000:ironclaw:admin'
 ```
 
 Every user-scoped tool authorises the caller against the requested tenant. A principal without `ironclaw:admin` cannot read another user's devices, and fleet metrics are admin-only.
@@ -126,6 +128,7 @@ Infrastructure-level checks, each requiring the relevant tooling:
 | `make chaos-broker-kill` | Broker failure mid-load against a 3-broker RF=3 cluster |
 | `make k8s-validate` / `make k8s-up` | Manifests against published schemas / a live kind cluster |
 | `make tf-validate` | `terraform fmt -check` and `terraform validate` |
+| `make ironclaw-verify` | The IronClaw extension contract: TLS, bearer injection, tool catalogue against the manifest's `max_tools`, tenant isolation, session binding |
 
 ## Security
 
@@ -158,6 +161,7 @@ Certificates for local development are issued by `deploy/pki/issue-certs.sh`. **
 | [`docs/availability.md`](docs/availability.md) | SLOs, redundancy, degradation modes, and measured chaos results |
 | [`docs/observability.md`](docs/observability.md) | Metrics, dashboards, alert thresholds and their derivation |
 | [`docs/state-sync.md`](docs/state-sync.md) | What merges without coordination and what needs a fencing lock |
+| [`docs/ironclaw-integration.md`](docs/ironclaw-integration.md) | Registering as an extension with the IronClaw agent OS |
 
 ## Status
 
@@ -169,6 +173,7 @@ Known gaps, stated plainly:
 - The fencing lock is implemented and tested, but **no feature consumes it yet** — device ownership reassignment and quarantine are unbuilt.
 - Grafana and Prometheus **provisioning** is not built. The dashboard and rules validate and every metric name they reference was cross-checked against a live scrape, but neither has been loaded into a running Grafana here.
 - Cross-region active-active is designed but **multi-region convergence is untested**.
+- The IronClaw extension manifest is validated against the host's **own parser**, but **no running IronClaw instance has loaded it** — installing the agent runtime and completing a live tool call is the remaining step.
 
 ## License
 
