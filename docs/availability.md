@@ -78,6 +78,8 @@ A JMeter run against the real edge (`make loadtest`, 20 device certificates, 100
 
 Note the drain time: Redis reaches exact reconciliation about 45 s after the load stops, because the aggregator is still working through consumer lag. Measuring immediately after a run understates the count and looks like loss. The freshness SLO (p99 under 5 s) has **not** been measured — that needs per-event timestamping from agent send to Redis visibility, which this harness does not yet do.
 
+**A certificate with no CN cannot reach the backend unidentified — tested.** A certificate signed by the real CA but carrying no Common Name (`subject=O=IronClaw, OU=devices`) was used to attack the live edge while supplying `X-Device-Id: device-000`. The edge answered **401** and the spoofed identity did not survive; a legitimate device certificate on the same edge answered 202. The original config was already safe here — HAProxy's `set-header` writes an empty value rather than skipping when the sample fetch yields nothing, so the client's header is replaced either way — but the edge now deletes both identity headers before setting them and denies any request that reaches the rules without an identity, so the property no longer depends on that behaviour.
+
 The per-certificate rate limiter was also exercised, unintentionally at first. An earlier unthrottled run pushed roughly 145 batches/s *per device*, and HAProxy returned 429 for 118,998 of 130,998 requests while still accepting 12,000. That is the stick table doing exactly its job: one misbehaving device cannot consume the ingest budget of the fleet. The realistic profile above sits far below the 600-per-10-s ceiling and sees no throttling.
 
 ## Chaos and SLO Results
