@@ -2,7 +2,9 @@ GO ?= go
 CLANG ?= clang
 BPF_SOURCE := bpf/ironclaw.c
 BPF_OBJECT := internal/ebpf/ironclaw.bpf.o
-BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_x86 -Wall -Werror
+BPF_ARCH := $(shell uname -m)
+BPF_ARCH_INCLUDE := $(if $(wildcard /usr/include/$(BPF_ARCH)-linux-gnu),-I/usr/include/$(BPF_ARCH)-linux-gnu,)
+BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_x86 -Wall -Werror $(BPF_ARCH_INCLUDE)
 
 COMPOSE := deploy/docker-compose.yml
 DOCKER ?= docker
