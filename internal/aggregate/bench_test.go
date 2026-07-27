@@ -124,3 +124,17 @@ func BenchmarkSketchQuantile(b *testing.B) {
 }
 
 var _ = fmt.Sprintf
+
+func BenchmarkIngestBatchManyKeys(b *testing.B) {
+	aggregator := benchAggregator(b)
+	batch := benchBatch(500, 500)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if err := aggregator.IngestBatch(batch); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
