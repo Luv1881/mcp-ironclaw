@@ -169,7 +169,7 @@ The pipeline, adapters, edge, Kubernetes manifests and load path have all been e
 
 Known gaps, stated plainly:
 
-- eBPF programs compile and their decoder is tested, but **attaching requires `CAP_BPF`** and has not been executed in the development environment. The agent ships a synthetic source behind the same `EventSource` port.
+- eBPF programs compile and their decoder is tested, but **attaching requires `CAP_BPF`** and has not been executed in the development environment. The agent ships a synthetic source behind the same `EventSource` port. The kernel/userspace record contract is now *derived* rather than asserted: a test parses `struct event` out of the C source, computes its C layout with alignment and padding, and checks the decoder's size and every field offset against it. That test was written after it caught a real 40-vs-48 byte mismatch which would have rejected every kernel record on first attach.
 - The fencing lock is implemented and tested, but **no feature consumes it yet** — device ownership reassignment and quarantine are unbuilt.
 - Grafana and Prometheus **provisioning** is not built. The dashboard and rules validate and every metric name they reference was cross-checked against a live scrape, but neither has been loaded into a running Grafana here.
 - Cross-region active-active is designed but **multi-region convergence is untested**.
