@@ -54,6 +54,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Build the eBPF object the loader embeds
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libbpf-dev
+          make bpf
+
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2

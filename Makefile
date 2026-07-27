@@ -16,7 +16,7 @@ PKI_DIR ?= deploy/pki/out
 
 all: fmt-check vet lint test
 
-lint:
+lint: $(BPF_OBJECT)
 	golangci-lint run ./...
 
 agent:
