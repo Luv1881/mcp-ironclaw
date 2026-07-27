@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ironclaw/mcp-ironclaw/internal/domain"
+	"github.com/ironclaw/mcp-ironclaw/internal/wire"
 )
 
 var ErrNilAcceptor = errors.New("httpingest: batch acceptor is nil")
@@ -36,21 +37,6 @@ func LocalPodID() string {
 
 type BatchAcceptor interface {
 	Accept(ctx context.Context, authenticatedDeviceID string, batch domain.Batch) error
-}
-
-type apiEvent struct {
-	UserID              string `json:"user_id"`
-	ProcessID           int32  `json:"process_id"`
-	Kind                uint8  `json:"kind"`
-	ObservedAtUnixNanos int64  `json:"observed_at_unix_nanos"`
-	LatencyNanos        int64  `json:"latency_nanos"`
-	Bytes               int64  `json:"bytes"`
-	Failed              bool   `json:"failed"`
-}
-
-type apiBatch struct {
-	DeviceID string     `json:"device_id"`
-	Events   []apiEvent `json:"events"`
 }
 
 type Config struct {
@@ -153,7 +139,7 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 	body := http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
 	defer body.Close()
 
-	var payload apiBatch
+	var payload wire.EdgeBatch
 	if err := json.NewDecoder(body).Decode(&payload); err != nil {
 		s.record(MetricRequestsRejected, 1)
 		http.Error(w, "malformed batch payload", http.StatusBadRequest)
@@ -188,7 +174,7 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (s *Server) toBatch(deviceID string, payload apiBatch) (domain.Batch, error) {
+func (s *Server) toBatch(deviceID string, payload wire.EdgeBatch) (domain.Batch, error) {
 	batch := domain.Batch{
 		DeviceID:  deviceID,
 		CreatedAt: s.clock.Now(),

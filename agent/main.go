@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -17,6 +16,7 @@ import (
 	"github.com/ironclaw/mcp-ironclaw/internal/store"
 	"github.com/ironclaw/mcp-ironclaw/internal/tracing"
 	"github.com/ironclaw/mcp-ironclaw/internal/transport"
+	"github.com/ironclaw/mcp-ironclaw/internal/wire"
 )
 
 type options struct {
@@ -207,38 +207,5 @@ func logStats(batcher *pipeline.Batcher, queue *spool.Spool) {
 }
 
 func encodeBatch(batch domain.Batch) ([]byte, error) {
-	type wireEvent struct {
-		UserID              string `json:"user_id"`
-		ProcessID           int32  `json:"process_id"`
-		PodID               string `json:"pod_id"`
-		Kind                uint8  `json:"kind"`
-		ObservedAtUnixNanos int64  `json:"observed_at_unix_nanos"`
-		LatencyNanos        int64  `json:"latency_nanos"`
-		Bytes               int64  `json:"bytes"`
-		Failed              bool   `json:"failed"`
-	}
-
-	payload := struct {
-		DeviceID string      `json:"device_id"`
-		Events   []wireEvent `json:"events"`
-	}{
-		DeviceID: batch.DeviceID,
-		Events:   make([]wireEvent, 0, batch.Len()),
-	}
-
-	for i := range batch.Events {
-		event := &batch.Events[i]
-		payload.Events = append(payload.Events, wireEvent{
-			UserID:              event.UserID,
-			ProcessID:           event.ProcessID,
-			PodID:               event.PodID,
-			Kind:                uint8(event.Kind),
-			ObservedAtUnixNanos: event.ObservedAt.UnixNano(),
-			LatencyNanos:        event.LatencyNanos,
-			Bytes:               event.Bytes,
-			Failed:              event.Failed,
-		})
-	}
-
-	return json.Marshal(payload)
+	return wire.EncodeEdgeBatch(batch)
 }
