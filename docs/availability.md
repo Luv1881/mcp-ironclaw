@@ -31,6 +31,19 @@ Error budget follows directly: 99.95% monthly allows roughly 21 minutes of faile
 
 **Kafka degraded or unreachable.** Ingest returns 503 and the edge sheds load. Agents spool batches to a size-capped local disk queue and replay when the path recovers. Nothing is acknowledged that was not durably written, so an agent never believes a dropped batch succeeded.
 
+**Agent restart during an outage — measured.** The interesting case is not spool-and-replay, it is spool, *restart*, spool more, then replay. Measured against the live edge:
+
+| Phase | Action | Result |
+| --- | --- | --- |
+| 1 | Edge down, agent produces 2,000 events, then is killed mid-outage | 21 batches on disk |
+| 2 | Agent **restarts** on the same spool directory, produces 2,000 more, edge still down | 42 batches on disk — the original 21 intact |
+| 3 | Edge returns, agent drains | spool empties to 0 |
+| 4 | Reconcile in Redis via the real edge, Kafka and aggregator | **4,200 of 4,200 events, zero loss** |
+
+Phase 2 is the assertion that matters. Before this was fixed, restarting the agent regenerated spool filenames from zero and `os.Rename` silently overwrote every surviving entry, so phase 1's 2,000 events were destroyed on disk while the spool still reported holding them. An earlier "61 batches spooled, all drained, zero loss" run could not see it, because it never restarted the agent with entries still in the queue.
+
+**A permanently refused batch no longer stalls the queue.** A 4xx other than 408/429 is treated as permanent: it is not spooled, and if already spooled it is released and counted as `agent_batches_refused` so the drain moves on. Previously any non-202 was retried forever, so one malformed batch at the head blocked every healthy batch behind it until the byte budget dropped them.
+
 **Postgres unavailable.** Aggregated windows accumulate in Kafka. With retention of at least 24 hours, the persister catches up once the database returns. The Redis hot path is unaffected because it consumes the same topic independently — this is exactly why the original DB-poll-to-Redis design was rejected.
 
 **Aggregator pod loss or rebalance.** Offsets are committed only after a window is emitted, so the new partition owner replays from the last committed offset and rebuilds the sketch from the actual events. Replay is safe because every window carries an identity (`correlation key + window_id`) and the store applies each identity exactly once.
