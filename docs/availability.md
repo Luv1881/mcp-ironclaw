@@ -91,6 +91,7 @@ The per-certificate rate limiter was also exercised, unintentionally at first. A
 | 2 s window, closed-window emission | 1.998 s | 2.013 s | 2.017 s | within 5 s |
 | 10 s window, closed-window emission | 10.0 s | 10.01 s | 10.012 s | **breaches 5 s** |
 | 10 s window, partial emission | 995 ms | 1.017 s | 1.017 s | within 5 s |
+| 10 s window, partial emission (re-measured after the review sweep) | 999 ms | 1.012 s | 1.015 s | within 5 s |
 
 The middle row matters: with closed-window emission an event cannot become visible until its window closes, so **freshness has a hard floor at the window size**. The plan's 10 s tumbling window and its p99-under-5 s freshness SLO were mutually incompatible. Enabling `-emit-open-windows` publishes the in-flight window as a delta each tick, so freshness tracks the emit interval instead and both requirements hold. This costs one extra emission per active key per tick, which is the trade to make consciously at fleet scale.
 
