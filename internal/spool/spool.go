@@ -3,9 +3,12 @@ package spool
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -88,12 +91,56 @@ func (s *Spool) recover() error {
 		names = append(names, name)
 		s.sizes[name] = info.Size()
 		s.bytes += info.Size()
+		s.observe(name)
 	}
 
 	sort.Strings(names)
 	s.order = names
 
 	return nil
+}
+
+func (s *Spool) observe(name string) {
+	ordinal, sequence, ok := parseName(name)
+	if !ok {
+		return
+	}
+	if ordinal > s.enqueued.Load() {
+		s.enqueued.Store(ordinal)
+	}
+	if sequence > s.seq {
+		s.seq = sequence
+	}
+}
+
+func parseName(name string) (int64, uint64, bool) {
+	trimmed := strings.TrimSuffix(name, extension)
+
+	separator := strings.LastIndex(trimmed, "-")
+	if separator < 0 {
+		return 0, 0, false
+	}
+
+	ordinal, err := strconv.ParseInt(trimmed[:separator], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	sequence, err := strconv.ParseUint(trimmed[separator+1:], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+
+	return ordinal, sequence, true
+}
+
+func (s *Spool) nextName() string {
+	for {
+		s.seq++
+		name := fmt.Sprintf("%020d-%06d%s", s.enqueued.Load()+1, s.seq, extension)
+		if _, taken := s.sizes[name]; !taken {
+			return name
+		}
+	}
 }
 
 func (s *Spool) Enqueue(payload []byte) error {
@@ -111,8 +158,7 @@ func (s *Spool) Enqueue(payload []byte) error {
 		s.dropped.Add(1)
 	}
 
-	s.seq++
-	name := fmt.Sprintf("%020d-%06d%s", s.enqueued.Load()+1, s.seq, extension)
+	name := s.nextName()
 	final := filepath.Join(s.dir, name)
 	temp := final + pending
 
@@ -143,7 +189,9 @@ func (s *Spool) Peek() ([]byte, string, error) {
 	name := s.order[0]
 	payload, err := os.ReadFile(filepath.Join(s.dir, name))
 	if err != nil {
-		s.removeLocked(name)
+		if errors.Is(err, fs.ErrNotExist) {
+			s.removeLocked(name)
+		}
 		return nil, "", fmt.Errorf("spool: reading entry: %w", err)
 	}
 

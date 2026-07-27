@@ -6,6 +6,7 @@ func KnownCounters() []string {
 		"agent_batches_spooled",
 		"agent_batches_drained",
 		"agent_spool_dropped",
+		"agent_batches_refused",
 		"http_ingest_accepted",
 		"http_ingest_rejected",
 		"http_ingest_unauthenticated",

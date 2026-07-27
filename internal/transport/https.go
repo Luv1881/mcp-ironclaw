@@ -23,6 +23,7 @@ var (
 	ErrNoKeyPair     = errors.New("transport: a client certificate and key are required")
 	ErrEmptyCABundle = errors.New("transport: CA bundle contained no certificates")
 	ErrRejected      = errors.New("transport: edge rejected the batch")
+	ErrUnacceptable  = errors.New("transport: edge permanently refused the batch")
 )
 
 var _ domain.Transport = (*HTTPS)(nil)
@@ -50,6 +51,7 @@ const (
 	MetricSpooled      = "agent_batches_spooled"
 	MetricDrained      = "agent_batches_drained"
 	MetricSpoolDropped = "agent_spool_dropped"
+	MetricRefused      = "agent_batches_refused"
 )
 
 type HTTPS struct {
@@ -156,6 +158,10 @@ func (h *HTTPS) Send(ctx context.Context, batch domain.Batch) error {
 	}
 
 	if err := h.post(ctx, payload); err != nil {
+		if errors.Is(err, ErrUnacceptable) {
+			h.record(MetricRefused, 1)
+			return err
+		}
 		if h.queue == nil {
 			return err
 		}
@@ -186,11 +192,26 @@ func (h *HTTPS) post(ctx context.Context, payload []byte) error {
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode != http.StatusAccepted {
+	switch {
+	case response.StatusCode >= 200 && response.StatusCode < 300:
+		return nil
+	case permanentlyRefused(response.StatusCode):
+		return fmt.Errorf("%w: status %d", ErrUnacceptable, response.StatusCode)
+	default:
 		return fmt.Errorf("%w: status %d", ErrRejected, response.StatusCode)
 	}
+}
 
-	return nil
+func permanentlyRefused(status int) bool {
+	if status < 400 || status >= 500 {
+		return false
+	}
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return false
+	default:
+		return true
+	}
 }
 
 func (h *HTTPS) Drain(ctx context.Context) {
@@ -215,6 +236,12 @@ func (h *HTTPS) Drain(ctx context.Context) {
 		}
 
 		if err := h.post(ctx, payload); err != nil {
+			if errors.Is(err, ErrUnacceptable) {
+				h.queue.Release(name)
+				h.record(MetricRefused, 1)
+				failures = 0
+				continue
+			}
 			failures++
 			if !h.wait(ctx, h.backoff(failures)) {
 				return

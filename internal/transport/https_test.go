@@ -7,6 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -248,5 +251,103 @@ func TestSpoolDropsAreCounted(t *testing.T) {
 	}
 	if recorded[transport.MetricSpoolDropped] != queue.Stats().Dropped {
 		t.Fatalf("counted %d drops, spool reports %d", recorded[transport.MetricSpoolDropped], queue.Stats().Dropped)
+	}
+}
+
+func TestAPermanentlyRefusedBatchIsNotSpooled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	queue := newSpool(t)
+	client := newHTTPS(t, server.URL, queue)
+
+	err := client.Send(context.Background(), sampleBatch())
+	if !errors.Is(err, transport.ErrUnacceptable) {
+		t.Fatalf("got %v, want ErrUnacceptable for a 400", err)
+	}
+	if got := queue.Stats().Entries; got != 0 {
+		t.Fatalf("spooled %d entries for a permanently refused batch; it would be retried forever", got)
+	}
+}
+
+func TestARefusedEntryDoesNotBlockTheDrainQueue(t *testing.T) {
+	var seen atomic.Int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		seen.Add(1)
+		if strings.Contains(string(body), "poison") {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	queue := newSpool(t)
+
+	if err := queue.Enqueue([]byte(`{"device_id":"poison","events":1}`)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := queue.Enqueue([]byte(`{"device_id":"good","events":1}`)); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	client := newHTTPS(t, server.URL, queue)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go client.Drain(ctx)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if queue.Stats().Entries == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("the spool still holds %d entries: one permanently refused batch blocked every healthy batch behind it", queue.Stats().Entries)
+}
+
+func TestATransientReadErrorDoesNotDiscardTheEntry(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	queue, err := spool.Open(dir, 1<<20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := queue.Enqueue([]byte("payload")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one spool file, found %d", len(entries))
+	}
+
+	path := filepath.Join(dir, entries[0].Name())
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Skipf("cannot make the entry unreadable: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(path, 0o600) })
+
+	if _, _, err := queue.Peek(); err == nil {
+		t.Skip("the entry stayed readable, so this environment cannot exercise a read failure")
+	}
+
+	if got := queue.Stats().Entries; got != 1 {
+		t.Fatalf("a transient read error discarded the entry: %d remain, want 1", got)
 	}
 }
