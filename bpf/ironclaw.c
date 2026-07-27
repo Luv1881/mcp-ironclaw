@@ -42,7 +42,8 @@ enum stat_index {
     STAT_DROPPED_RINGBUF = 2,
     STAT_DROPPED_RATE = 3,
     STAT_DROPPED_FILTER = 4,
-    STAT_MAX = 5,
+    STAT_DROPPED_UNPAIRED = 5,
+    STAT_MAX = 6,
 };
 
 struct trace_event_sys_enter {
@@ -160,8 +161,10 @@ int ironclaw_sys_exit(struct trace_event_sys_exit *ctx)
     __u64 pid_tgid = bpf_get_current_pid_tgid();
 
     __u64 *started = bpf_map_lookup_elem(&start_times, &pid_tgid);
-    if (!started)
+    if (!started) {
+        bump(STAT_DROPPED_UNPAIRED);
         return 0;
+    }
 
     __u64 now = bpf_ktime_get_ns();
     __u64 latency = now - *started;

@@ -8,7 +8,7 @@ import (
 	"github.com/ironclaw/mcp-ironclaw/internal/domain"
 )
 
-const RecordSize = 48
+const RecordSize = 40
 
 var (
 	ErrShortRecord     = errors.New("ebpf: record is shorter than the kernel event layout")

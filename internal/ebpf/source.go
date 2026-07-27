@@ -21,15 +21,6 @@ import (
 //go:embed ironclaw.bpf.o
 var program []byte
 
-const (
-	statObserved = iota
-	statEmitted
-	statDroppedRingbuf
-	statDroppedRate
-	statDroppedFilter
-	statCount
-)
-
 var ErrAlreadyStarted = errors.New("ebpf: source already started")
 
 type Settings struct {
@@ -46,15 +37,6 @@ type kernelConfig struct {
 	TargetTGID               uint32
 	Enabled                  uint8
 	Pad                      [7]uint8
-}
-
-type Stats struct {
-	Observed       uint64
-	Emitted        uint64
-	DroppedRingbuf uint64
-	DroppedRate    uint64
-	DroppedFilter  uint64
-	DecodeFailures uint64
 }
 
 type Source struct {
@@ -244,12 +226,13 @@ func (s *Source) Stats() (Stats, error) {
 	}
 
 	return Stats{
-		Observed:       totals[statObserved],
-		Emitted:        totals[statEmitted],
-		DroppedRingbuf: totals[statDroppedRingbuf],
-		DroppedRate:    totals[statDroppedRate],
-		DroppedFilter:  totals[statDroppedFilter],
-		DecodeFailures: failures,
+		Observed:        totals[statObserved],
+		Emitted:         totals[statEmitted],
+		DroppedRingbuf:  totals[statDroppedRingbuf],
+		DroppedRate:     totals[statDroppedRate],
+		DroppedFilter:   totals[statDroppedFilter],
+		DroppedUnpaired: totals[statDroppedUnpaired],
+		DecodeFailures:  failures,
 	}, nil
 }
 
