@@ -486,3 +486,134 @@ func TestDeadLetteredRecordCarriesItsReason(t *testing.T) {
 		t.Fatalf("dead letter origin header is %q, want %q", headers[kafkabus.DeadLetterOriginHeader], topic)
 	}
 }
+
+func TestRetryingConsumerRequiresADeadLetterTopic(t *testing.T) {
+	_, err := kafkabus.NewConsumer(kafkabus.Config{
+		Brokers:     []string{"localhost:19092"},
+		Topic:       "irrelevant",
+		Group:       "irrelevant",
+		MaxAttempts: 3,
+	})
+	if !errors.Is(err, kafkabus.ErrNoDeadTopic) {
+		t.Fatalf("got %v, want ErrNoDeadTopic at construction rather than a runtime failure on the first poison message", err)
+	}
+}
+
+func TestSingleAttemptConsumerNeedsNoDeadLetterTopic(t *testing.T) {
+	consumer, err := kafkabus.NewConsumer(kafkabus.Config{
+		Brokers:     []string{"localhost:19092"},
+		Topic:       "irrelevant",
+		Group:       "irrelevant",
+		MaxAttempts: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	consumer.Close()
+}
+
+func TestOffsetsAdvanceOnlyOverHandledRecords(t *testing.T) {
+	brokers := testenv.KafkaBrokers(t)
+	topic := uniqueTopic("ironclaw-partial")
+	group := "ironclaw-test-" + topic
+
+	producer, err := kafkabus.NewProducer(kafkabus.Config{Brokers: brokers, Topic: topic})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer producer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	const published = 6
+	for i := 0; i < published; i++ {
+		if err := producer.Publish(ctx, "one-partition", batchOf(fmt.Sprintf("device-%d", i), 1)); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	failAt := "device-3"
+
+	consumer, err := kafkabus.NewConsumer(kafkabus.Config{
+		Brokers:     brokers,
+		Topic:       topic,
+		Group:       group,
+		MaxAttempts: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var (
+		mu    sync.Mutex
+		first []string
+	)
+
+	consumeCtx, stop := context.WithCancel(ctx)
+	go func() {
+		_ = consumer.Consume(consumeCtx, func(_ context.Context, batch domain.Batch) error {
+			mu.Lock()
+			defer mu.Unlock()
+			if batch.DeviceID == failAt {
+				return errors.New("refusing this batch")
+			}
+			first = append(first, batch.DeviceID)
+			return nil
+		})
+		stop()
+	}()
+
+	<-consumeCtx.Done()
+	consumer.Close()
+
+	mu.Lock()
+	handled := append([]string(nil), first...)
+	mu.Unlock()
+
+	if len(handled) == 0 {
+		t.Fatal("the first consumer handled nothing, so this test proves nothing")
+	}
+	for _, device := range handled {
+		if device == failAt {
+			t.Fatalf("%s was reported handled but the handler refused it", failAt)
+		}
+	}
+
+	resumed, err := kafkabus.NewConsumer(kafkabus.Config{
+		Brokers:     brokers,
+		Topic:       topic,
+		Group:       group,
+		MaxAttempts: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer resumed.Close()
+
+	seen := make(chan string, published)
+	resumeCtx, stopResume := context.WithTimeout(ctx, 25*time.Second)
+	defer stopResume()
+
+	go func() {
+		_ = resumed.Consume(resumeCtx, func(_ context.Context, batch domain.Batch) error {
+			select {
+			case seen <- batch.DeviceID:
+			default:
+			}
+			return nil
+		})
+	}()
+
+	deadline := time.After(25 * time.Second)
+	for {
+		select {
+		case device := <-seen:
+			if device == failAt {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("%s was never redelivered: its offset was committed even though the handler refused it", failAt)
+		}
+	}
+}

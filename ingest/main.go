@@ -210,6 +210,10 @@ func buildTLS(opts options) (*tls.Config, error) {
 		return nil, errors.New("require-mtls is set but no client CA was provided, so client certificates cannot be verified")
 	}
 
+	if opts.clientCA != "" && len(opts.allowedClientCNs()) == 0 {
+		return nil, errors.New("a client CA is configured but allowed-client-cn is empty: the CA that signs the edge also signs device certificates, so without pinning a device could bypass the edge and submit telemetry as another device")
+	}
+
 	if opts.clientCA != "" {
 		pem, err := os.ReadFile(opts.clientCA)
 		if err != nil {

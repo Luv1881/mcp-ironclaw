@@ -173,6 +173,9 @@ func NewConsumer(config Config) (*Consumer, error) {
 	if config.MaxAttempts <= 0 {
 		config.MaxAttempts = 1
 	}
+	if config.MaxAttempts > 1 && config.DeadLetterTopic == "" {
+		return nil, ErrNoDeadTopic
+	}
 
 	secure, err := config.Security.options()
 	if err != nil {
@@ -262,22 +265,33 @@ func (c *Consumer) poll(ctx context.Context, handle func(context.Context, *kgo.R
 			return fmt.Errorf("kafkabus: fetching: %w", errs[0].Err)
 		}
 
-		var failure error
+		var (
+			failure error
+			handled []*kgo.Record
+		)
+
 		fetches.EachRecord(func(record *kgo.Record) {
 			if failure != nil {
 				return
 			}
-			failure = c.deliver(ctx, record, handle)
+			if err := c.deliver(ctx, record, handle); err != nil {
+				failure = err
+				return
+			}
+			handled = append(handled, record)
 		})
-		if failure != nil {
-			return failure
+
+		if len(handled) > 0 {
+			if err := c.client.CommitRecords(ctx, handled...); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return fmt.Errorf("kafkabus: committing offsets: %w", err)
+			}
 		}
 
-		if err := c.client.CommitUncommittedOffsets(ctx); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return fmt.Errorf("kafkabus: committing offsets: %w", err)
+		if failure != nil {
+			return failure
 		}
 	}
 }
