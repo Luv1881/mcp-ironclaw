@@ -300,3 +300,35 @@ func TestUncommittedWindowsCountAgainstTheKeyCeiling(t *testing.T) {
 		t.Fatalf("the aggregator holds %d windows against a ceiling of %d: windows awaiting commit do not count, so a stalled publisher grows memory without bound", got, ceiling)
 	}
 }
+
+func TestIngestBatchShedsWithoutFailingTheWholeBatch(t *testing.T) {
+	const ceiling = 4
+
+	aggregator, err := aggregate.New(aggregate.Config{
+		WindowSize:     windowSize,
+		MaxOpenWindows: ceiling,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	batch := domain.Batch{DeviceID: "device-0", CreatedAt: windowBase}
+	for i := 0; i < 40; i++ {
+		batch.Events = append(batch.Events, event(int32(i), windowBase, time.Millisecond, false))
+	}
+
+	if err := aggregator.IngestBatch(batch); err != nil {
+		t.Fatalf("a batch that exceeds the key ceiling must still succeed for the keys it can hold: %v", err)
+	}
+
+	if got := aggregator.OpenWindows(); got != ceiling {
+		t.Fatalf("held %d keys, want the ceiling of %d", got, ceiling)
+	}
+	if got := aggregator.Shed(); got != 36 {
+		t.Fatalf("shed %d events, want 36 — shedding must be observable even though the batch reports success", got)
+	}
+
+	if err := aggregator.Ingest(event(99, windowBase, time.Millisecond, false)); !errors.Is(err, aggregate.ErrTooManyKeys) {
+		t.Fatalf("got %v, want ErrTooManyKeys for a single-event caller at the ceiling", err)
+	}
+}

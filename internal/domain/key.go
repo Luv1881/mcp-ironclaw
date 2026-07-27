@@ -1,7 +1,7 @@
 package domain
 
 import (
-	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -13,7 +13,23 @@ type CorrelationKey struct {
 }
 
 func (k CorrelationKey) String() string {
-	return fmt.Sprintf("{%s}:%s:%d:%s", k.UserID, k.DeviceID, k.ProcessID, k.PodID)
+	return string(k.append(make([]byte, 0, k.formattedLen())))
+}
+
+func (k CorrelationKey) formattedLen() int {
+	return len(k.UserID) + len(k.DeviceID) + len(k.PodID) + 16
+}
+
+func (k CorrelationKey) append(buffer []byte) []byte {
+	buffer = append(buffer, '{')
+	buffer = append(buffer, k.UserID...)
+	buffer = append(buffer, '}', ':')
+	buffer = append(buffer, k.DeviceID...)
+	buffer = append(buffer, ':')
+	buffer = strconv.AppendInt(buffer, int64(k.ProcessID), 10)
+	buffer = append(buffer, ':')
+
+	return append(buffer, k.PodID...)
 }
 
 func (k CorrelationKey) ShardTag() string {
@@ -21,7 +37,13 @@ func (k CorrelationKey) ShardTag() string {
 }
 
 func (k CorrelationKey) DeviceScope() string {
-	return fmt.Sprintf("{%s}:%s", k.UserID, k.DeviceID)
+	buffer := make([]byte, 0, len(k.UserID)+len(k.DeviceID)+4)
+	buffer = append(buffer, '{')
+	buffer = append(buffer, k.UserID...)
+	buffer = append(buffer, '}', ':')
+	buffer = append(buffer, k.DeviceID...)
+
+	return string(buffer)
 }
 
 type AggregateWindow struct {
@@ -39,11 +61,21 @@ type AggregateWindow struct {
 }
 
 func (w AggregateWindow) Identity() string {
-	return fmt.Sprintf("%s#%d#%d", w.Key.String(), w.WindowID, w.Sequence)
+	buffer := w.Key.append(make([]byte, 0, w.Key.formattedLen()+42))
+	buffer = append(buffer, '#')
+	buffer = strconv.AppendInt(buffer, w.WindowID, 10)
+	buffer = append(buffer, '#')
+	buffer = strconv.AppendInt(buffer, w.Sequence, 10)
+
+	return string(buffer)
 }
 
 func (w AggregateWindow) WindowIdentity() string {
-	return fmt.Sprintf("%s#%d", w.Key.String(), w.WindowID)
+	buffer := w.Key.append(make([]byte, 0, w.Key.formattedLen()+21))
+	buffer = append(buffer, '#')
+	buffer = strconv.AppendInt(buffer, w.WindowID, 10)
+
+	return string(buffer)
 }
 
 type DeviceState struct {

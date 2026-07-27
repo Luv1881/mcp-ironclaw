@@ -214,24 +214,14 @@ func (a *Aggregator) Flush() ([]domain.AggregateWindow, error) {
 }
 
 func (a *Aggregator) collect(include func(windowKey) bool) ([]domain.AggregateWindow, error) {
-	type sortableKey struct {
-		key   windowKey
-		label string
-	}
-
-	selected := make([]sortableKey, 0, len(a.open))
+	selected := make([]windowKey, 0, len(a.open))
 	for key := range a.open {
 		if include(key) {
-			selected = append(selected, sortableKey{key: key, label: key.correlation.String()})
+			selected = append(selected, key)
 		}
 	}
 
-	sort.Slice(selected, func(i, j int) bool {
-		if selected[i].key.windowID != selected[j].key.windowID {
-			return selected[i].key.windowID < selected[j].key.windowID
-		}
-		return selected[i].label < selected[j].label
-	})
+	sort.Slice(selected, func(i, j int) bool { return selected[i].before(selected[j]) })
 
 	windows := make([]domain.AggregateWindow, 0, len(selected)+len(a.pending))
 	for _, window := range a.pending {
@@ -239,8 +229,7 @@ func (a *Aggregator) collect(include func(windowKey) bool) ([]domain.AggregateWi
 	}
 	sort.Slice(windows, func(i, j int) bool { return windows[i].Identity() < windows[j].Identity() })
 
-	for _, entry := range selected {
-		key := entry.key
+	for _, key := range selected {
 		state := a.open[key]
 
 		p95, err := state.sketch.Quantile(0.95)
@@ -276,4 +265,20 @@ func (a *Aggregator) collect(include func(windowKey) bool) ([]domain.AggregateWi
 	}
 
 	return windows, nil
+}
+
+func (k windowKey) before(other windowKey) bool {
+	if k.windowID != other.windowID {
+		return k.windowID < other.windowID
+	}
+	if k.correlation.UserID != other.correlation.UserID {
+		return k.correlation.UserID < other.correlation.UserID
+	}
+	if k.correlation.DeviceID != other.correlation.DeviceID {
+		return k.correlation.DeviceID < other.correlation.DeviceID
+	}
+	if k.correlation.ProcessID != other.correlation.ProcessID {
+		return k.correlation.ProcessID < other.correlation.ProcessID
+	}
+	return k.correlation.PodID < other.correlation.PodID
 }
