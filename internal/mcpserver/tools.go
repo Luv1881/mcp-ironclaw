@@ -228,7 +228,7 @@ func (t *Tools) ResetCounters(ctx context.Context, input ResetCountersInput) (Re
 		Kind:     domain.CommandResetCounters,
 		UserID:   input.UserID,
 		DeviceID: input.DeviceID,
-		Actor:    input.Actor,
+		Actor:    t.actor(ctx, input.Actor),
 		IssuedAt: t.clock.Now(),
 	}
 
@@ -240,6 +240,17 @@ func (t *Tools) ResetCounters(ctx context.Context, input ResetCountersInput) (Re
 	}
 
 	return ResetCountersOutput{Accepted: true, Command: command.Kind.String()}, nil
+}
+
+func (t *Tools) actor(ctx context.Context, claimed string) string {
+	principal, ok := PrincipalFrom(ctx)
+	if !ok || principal.UserID == "" {
+		return claimed
+	}
+	if principal.hasScope(ScopeAdmin) && claimed != "" {
+		return claimed
+	}
+	return principal.UserID
 }
 
 func (t *Tools) WatchDevice(ctx context.Context, input WatchDeviceInput) (WatchDeviceOutput, error) {

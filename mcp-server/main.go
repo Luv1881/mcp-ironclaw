@@ -48,11 +48,13 @@ func main() {
 	var httpAddr string
 	var staticTokens string
 	var requireAuth bool
+	var allowAnonymous bool
 	var tlsCert, tlsKey, clientCA string
 	flag.BoolVar(&headless, "headless", false, "run the pipeline without the stdio MCP server, for deployment as an aggregator or persister")
 	flag.StringVar(&healthAddr, "health-addr", ":8080", "address serving /healthz when headless")
 	flag.StringVar(&httpAddr, "http-addr", "", "serve MCP over streamable HTTP on this address instead of stdio")
 	flag.BoolVar(&requireAuth, "require-auth", true, "require a bearer token on the HTTP transport")
+	flag.BoolVar(&allowAnonymous, "allow-anonymous-http", false, "serve the HTTP transport with no authentication; every tool then reads every tenant")
 	flag.StringVar(&staticTokens, "tokens", os.Getenv("IRONCLAW_MCP_TOKENS"), "static bearer tokens as token:user[:scope|scope], comma separated")
 	flag.StringVar(&tlsCert, "tls-cert", os.Getenv("IRONCLAW_MCP_CERT"), "server certificate for the HTTP transport")
 	flag.StringVar(&tlsKey, "tls-key", os.Getenv("IRONCLAW_MCP_KEY"), "server key for the HTTP transport")
@@ -60,14 +62,15 @@ func main() {
 	flag.Parse()
 
 	serve := serveOptions{
-		headless:     headless,
-		healthAddr:   healthAddr,
-		httpAddr:     httpAddr,
-		staticTokens: staticTokens,
-		requireAuth:  requireAuth,
-		tlsCert:      tlsCert,
-		tlsKey:       tlsKey,
-		clientCA:     clientCA,
+		headless:       headless,
+		healthAddr:     healthAddr,
+		httpAddr:       httpAddr,
+		staticTokens:   staticTokens,
+		requireAuth:    requireAuth,
+		allowAnonymous: allowAnonymous,
+		tlsCert:        tlsCert,
+		tlsKey:         tlsKey,
+		clientCA:       clientCA,
 	}
 
 	if err := run(config, serve); err != nil {
@@ -76,14 +79,15 @@ func main() {
 }
 
 type serveOptions struct {
-	headless     bool
-	healthAddr   string
-	httpAddr     string
-	staticTokens string
-	requireAuth  bool
-	tlsCert      string
-	tlsKey       string
-	clientCA     string
+	headless       bool
+	healthAddr     string
+	httpAddr       string
+	staticTokens   string
+	requireAuth    bool
+	allowAnonymous bool
+	tlsCert        string
+	tlsKey         string
+	clientCA       string
 }
 
 func run(config app.Config, serve serveOptions) error {
@@ -176,6 +180,10 @@ func serveHTTP(ctx context.Context, tools *mcpserver.Tools, serve serveOptions, 
 		CertFile:     serve.tlsCert,
 		KeyFile:      serve.tlsKey,
 		ClientCAFile: serve.clientCA,
+	}
+
+	if !serve.requireAuth && !serve.allowAnonymous {
+		return errors.New("ironclaw: -require-auth=false serves every tenant's telemetry to any caller; pass -allow-anonymous-http to accept that explicitly")
 	}
 
 	if serve.requireAuth {

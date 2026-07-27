@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -106,9 +107,25 @@ type StaticToken struct {
 	Expiry time.Time
 }
 
+func lookupToken(tokens map[string]StaticToken, presented string) (StaticToken, bool) {
+	var (
+		found StaticToken
+		match bool
+	)
+
+	for candidate, entry := range tokens {
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(presented)) == 1 {
+			found = entry
+			match = true
+		}
+	}
+
+	return found, match
+}
+
 func StaticTokenVerifier(tokens map[string]StaticToken) auth.TokenVerifier {
 	return func(_ context.Context, token string, _ *http.Request) (*auth.TokenInfo, error) {
-		entry, ok := tokens[token]
+		entry, ok := lookupToken(tokens, token)
 		if !ok {
 			return nil, ErrUnknownToken
 		}
@@ -139,7 +156,7 @@ func ParseStaticTokens(raw string) map[string]StaticToken {
 		}
 
 		parts := strings.SplitN(entry, ":", 3)
-		if len(parts) < 2 {
+		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 			continue
 		}
 
