@@ -3,7 +3,9 @@ package bus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"hash/fnv"
+	"math"
 	"sync"
 	"sync/atomic"
 )
@@ -13,6 +15,7 @@ var (
 	ErrInvalidCapacity   = errors.New("bus: partition capacity must be positive")
 	ErrInvalidAttempts   = errors.New("bus: max attempts must be positive")
 	ErrNoFreePartition   = errors.New("bus: every partition is already claimed")
+	ErrNoPartition       = errors.New("bus: partition is outside the configured range")
 	ErrClosed            = errors.New("bus: closed")
 )
 
@@ -24,6 +27,9 @@ type Config struct {
 
 func (c Config) validate() error {
 	if c.Partitions <= 0 {
+		return ErrInvalidPartitions
+	}
+	if c.Partitions > math.MaxInt32 {
 		return ErrInvalidPartitions
 	}
 	if c.Capacity <= 0 {
@@ -44,19 +50,24 @@ type Stats struct {
 }
 
 type Bus[T any] struct {
-	config     Config
-	partitions []chan T
-	claimed    []bool
-	deadLetter []T
-	shutdown   chan struct{}
-	mu         sync.Mutex
-	closeOnce  sync.Once
-	closed     atomic.Bool
-	published  atomic.Int64
-	delivered  atomic.Int64
-	retried    atomic.Int64
-	dead       atomic.Int64
-	abandoned  atomic.Int64
+	config         Config
+	partitions     []chan T
+	claimed        []bool
+	deadLetter     []T
+	partitionCount uint32
+	closing        chan struct{}
+	shutdown       chan struct{}
+	sendMu         sync.Mutex
+	sendIdle       *sync.Cond
+	inflight       int
+	mu             sync.Mutex
+	closeOnce      sync.Once
+	closed         atomic.Bool
+	published      atomic.Int64
+	delivered      atomic.Int64
+	retried        atomic.Int64
+	dead           atomic.Int64
+	abandoned      atomic.Int64
 }
 
 func New[T any](config Config) (*Bus[T], error) {
@@ -67,17 +78,27 @@ func New[T any](config Config) (*Bus[T], error) {
 		return nil, err
 	}
 
+	if config.Partitions <= 0 || config.Partitions > math.MaxInt32 {
+		return nil, ErrInvalidPartitions
+	}
+	partitionCount := uint32(config.Partitions)
+
 	partitions := make([]chan T, config.Partitions)
 	for i := range partitions {
 		partitions[i] = make(chan T, config.Capacity)
 	}
 
-	return &Bus[T]{
-		config:     config,
-		partitions: partitions,
-		claimed:    make([]bool, config.Partitions),
-		shutdown:   make(chan struct{}),
-	}, nil
+	broker := &Bus[T]{
+		config:         config,
+		partitionCount: partitionCount,
+		partitions:     partitions,
+		claimed:        make([]bool, config.Partitions),
+		closing:        make(chan struct{}),
+		shutdown:       make(chan struct{}),
+	}
+	broker.sendIdle = sync.NewCond(&broker.sendMu)
+
+	return broker, nil
 }
 
 func (b *Bus[T]) Partitions() int { return b.config.Partitions }
@@ -85,7 +106,7 @@ func (b *Bus[T]) Partitions() int { return b.config.Partitions }
 func (b *Bus[T]) PartitionFor(key string) int {
 	hasher := fnv.New32a()
 	_, _ = hasher.Write([]byte(key))
-	return int(hasher.Sum32()) % b.config.Partitions
+	return int(hasher.Sum32() % b.partitionCount)
 }
 
 func (b *Bus[T]) Stats() Stats {
@@ -109,14 +130,41 @@ func (b *Bus[T]) Send(ctx context.Context, key string, value T) error {
 		return ErrClosed
 	}
 
+	if !b.enterSend() {
+		return ErrClosed
+	}
+	defer b.leaveSend()
+
 	select {
 	case b.partitions[b.PartitionFor(key)] <- value:
 		b.published.Add(1)
 		return nil
-	case <-b.shutdown:
+	case <-b.closing:
 		return ErrClosed
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (b *Bus[T]) enterSend() bool {
+	b.sendMu.Lock()
+	defer b.sendMu.Unlock()
+
+	if b.closed.Load() {
+		return false
+	}
+	b.inflight++
+
+	return true
+}
+
+func (b *Bus[T]) leaveSend() {
+	b.sendMu.Lock()
+	defer b.sendMu.Unlock()
+
+	b.inflight--
+	if b.inflight == 0 {
+		b.sendIdle.Broadcast()
 	}
 }
 
@@ -198,6 +246,9 @@ func (b *Bus[T]) Receive(ctx context.Context, handler func(context.Context, T) e
 }
 
 func (b *Bus[T]) ReceivePartition(ctx context.Context, partition int, handler func(context.Context, T) error) error {
+	if partition < 0 || partition >= b.config.Partitions {
+		return fmt.Errorf("%w: partition %d of %d", ErrNoPartition, partition, b.config.Partitions)
+	}
 	return b.consume(ctx, partition, handler)
 }
 
@@ -254,7 +305,14 @@ func (b *Bus[T]) deliver(ctx context.Context, value T, handler func(context.Cont
 
 func (b *Bus[T]) Close() {
 	b.closeOnce.Do(func() {
+		b.sendMu.Lock()
 		b.closed.Store(true)
+		close(b.closing)
+		for b.inflight > 0 {
+			b.sendIdle.Wait()
+		}
+		b.sendMu.Unlock()
+
 		close(b.shutdown)
 	})
 }

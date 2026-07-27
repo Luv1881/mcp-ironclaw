@@ -3,7 +3,9 @@ package bus_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -189,5 +191,91 @@ func TestSendOnAFullPartitionReturnsClosedAfterShutdown(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Send blocked on a full partition after Close instead of returning ErrClosed")
+	}
+}
+
+func TestNoAcceptedSendIsStrandedByAConcurrentClose(t *testing.T) {
+	for attempt := 0; attempt < 25; attempt++ {
+		broker, err := bus.New[domain.Batch](bus.Config{Partitions: 4, Capacity: 64, MaxAttempts: 1})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var (
+			delivered atomic.Int64
+			accepted  atomic.Int64
+			senders   sync.WaitGroup
+			consumers sync.WaitGroup
+		)
+
+		ctx, cancel := context.WithCancel(context.Background())
+
+		for partition := 0; partition < 4; partition++ {
+			consumers.Add(1)
+			go func(p int) {
+				defer consumers.Done()
+				_ = broker.ReceivePartition(ctx, p, func(context.Context, domain.Batch) error {
+					delivered.Add(1)
+					return nil
+				})
+			}(partition)
+		}
+
+		start := make(chan struct{})
+		for sender := 0; sender < 8; sender++ {
+			senders.Add(1)
+			go func(id int) {
+				defer senders.Done()
+				<-start
+				for i := 0; i < 20; i++ {
+					err := broker.Send(context.Background(), fmt.Sprintf("device-%d-%d", id, i), domain.Batch{DeviceID: "d"})
+					if err == nil {
+						accepted.Add(1)
+					}
+				}
+			}(sender)
+		}
+
+		close(start)
+		time.Sleep(time.Duration(attempt%5) * time.Millisecond)
+		broker.Close()
+
+		senders.Wait()
+		consumers.Wait()
+		cancel()
+
+		if got, want := delivered.Load(), accepted.Load(); got != want {
+			t.Fatalf("attempt %d: %d sends were accepted but only %d were delivered — a send that returned nil was stranded by Close", attempt, want, got)
+		}
+	}
+}
+
+func TestReceivePartitionRejectsAnOutOfRangePartition(t *testing.T) {
+	broker, err := bus.New[domain.Batch](bus.Config{Partitions: 4, Capacity: 8, MaxAttempts: 1})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer broker.Close()
+
+	for _, partition := range []int{-1, 4, 99} {
+		err := broker.ReceivePartition(context.Background(), partition, func(context.Context, domain.Batch) error { return nil })
+		if !errors.Is(err, bus.ErrNoPartition) {
+			t.Fatalf("partition %d returned %v, want ErrNoPartition instead of an index panic", partition, err)
+		}
+	}
+}
+
+func TestPartitionForIsAlwaysInRange(t *testing.T) {
+	broker, err := bus.New[domain.Batch](bus.Config{Partitions: 8, Capacity: 4, MaxAttempts: 1})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer broker.Close()
+
+	for i := 0; i < 20000; i++ {
+		partition := broker.PartitionFor(fmt.Sprintf("device-%d-%x", i, i*2654435761))
+		if partition < 0 || partition >= 8 {
+			t.Fatalf("PartitionFor returned %d, outside [0,8)", partition)
+		}
 	}
 }
