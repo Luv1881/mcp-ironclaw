@@ -92,10 +92,6 @@ const (
 	MetricHandlerErrors = "consumer_handler_errors"
 )
 
-func New(config Config) (*Runtime, error) {
-	return NewWithContext(context.Background(), config)
-}
-
 func NewWithContext(ctx context.Context, config Config) (*Runtime, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
@@ -263,8 +259,6 @@ func (r *Runtime) report(stage string, err error) {
 	}
 	log.Printf("ironclaw: %s stopped with error: %v", stage, err)
 }
-
-func (r *Runtime) Failures() int64 { return r.failures.Load() }
 
 func spawn(group *sync.WaitGroup, work func()) {
 	group.Add(1)

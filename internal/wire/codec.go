@@ -51,11 +51,14 @@ func (Protobuf) EncodeBatch(batch domain.Batch) ([]byte, error) {
 	message := &pb.Batch{
 		DeviceId:           batch.DeviceID,
 		CreatedAtUnixNanos: batch.CreatedAt.UnixNano(),
-		Events:             make([]*pb.Event, 0, len(batch.Events)),
+		Events:             make([]*pb.Event, len(batch.Events)),
 	}
 
-	for _, event := range batch.Events {
-		message.Events = append(message.Events, &pb.Event{
+	backing := make([]pb.Event, len(batch.Events))
+
+	for i := range batch.Events {
+		event := &batch.Events[i]
+		backing[i] = pb.Event{
 			DeviceId:            event.DeviceID,
 			UserId:              event.UserID,
 			ProcessId:           event.ProcessID,
@@ -65,7 +68,8 @@ func (Protobuf) EncodeBatch(batch domain.Batch) ([]byte, error) {
 			LatencyNanos:        event.LatencyNanos,
 			Bytes:               event.Bytes,
 			Failed:              event.Failed,
-		})
+		}
+		message.Events[i] = &backing[i]
 	}
 
 	encoded, err := proto.Marshal(message)
@@ -204,7 +208,8 @@ func (JSON) EncodeBatch(batch domain.Batch) ([]byte, error) {
 		Events:    make([]jsonEvent, 0, len(batch.Events)),
 	}
 
-	for _, event := range batch.Events {
+	for i := range batch.Events {
+		event := &batch.Events[i]
 		payload.Events = append(payload.Events, jsonEvent{
 			DeviceID:     event.DeviceID,
 			UserID:       event.UserID,
@@ -239,7 +244,8 @@ func (JSON) DecodeBatch(raw []byte) (domain.Batch, error) {
 		batch.CreatedAt = time.Unix(0, payload.CreatedAt).UTC()
 	}
 
-	for _, event := range payload.Events {
+	for i := range payload.Events {
+		event := &payload.Events[i]
 		batch.Events = append(batch.Events, domain.Event{
 			DeviceID:     event.DeviceID,
 			UserID:       event.UserID,

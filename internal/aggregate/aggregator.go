@@ -111,13 +111,17 @@ func (a *Aggregator) Ingest(event domain.Event) error {
 		return err
 	}
 
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return a.ingestLocked(event)
+}
+
+func (a *Aggregator) ingestLocked(event domain.Event) error {
 	key := windowKey{
 		correlation: event.CorrelationKey(),
 		windowID:    a.WindowID(event.ObservedAt),
 	}
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	state, ok := a.open[key]
 	if !ok {
@@ -145,19 +149,24 @@ func (a *Aggregator) Ingest(event domain.Event) error {
 }
 
 func (a *Aggregator) IngestBatch(batch domain.Batch) error {
-	for _, event := range batch.Events {
-		if err := event.Validate(); err != nil {
+	for i := range batch.Events {
+		if err := batch.Events[i].Validate(); err != nil {
 			return err
 		}
 	}
-	for _, event := range batch.Events {
-		if err := a.Ingest(event); err != nil {
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for i := range batch.Events {
+		if err := a.ingestLocked(batch.Events[i]); err != nil {
 			if errors.Is(err, ErrTooManyKeys) {
 				continue
 			}
 			return err
 		}
 	}
+
 	return nil
 }
 

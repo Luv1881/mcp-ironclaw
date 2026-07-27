@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strings"
 )
 
 var (
@@ -46,16 +45,4 @@ func RequireTLS(dsn string, rootCert string) (string, error) {
 	parsed.RawQuery = query.Encode()
 
 	return parsed.String(), nil
-}
-
-func TLSEnabled(dsn string) bool {
-	parsed, err := url.Parse(dsn)
-	if err != nil {
-		return false
-	}
-	mode := parsed.Query().Get("sslmode")
-	if mode == "" {
-		return true
-	}
-	return permittedSSLModes[strings.ToLower(mode)]
 }

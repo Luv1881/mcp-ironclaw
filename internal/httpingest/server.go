@@ -195,7 +195,8 @@ func (s *Server) toBatch(deviceID string, payload apiBatch) (domain.Batch, error
 		Events:    make([]domain.Event, 0, len(payload.Events)),
 	}
 
-	for _, event := range payload.Events {
+	for i := range payload.Events {
+		event := &payload.Events[i]
 		observed := s.clock.Now()
 		if event.ObservedAtUnixNanos > 0 {
 			observed = time.Unix(0, event.ObservedAtUnixNanos).UTC()

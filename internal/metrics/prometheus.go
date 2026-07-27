@@ -22,7 +22,7 @@ var _ domain.MetricsRecorder = (*Prometheus)(nil)
 
 type Prometheus struct {
 	registry *prometheus.Registry
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	counters map[string]prometheus.Counter
 }
 
@@ -52,6 +52,13 @@ func (p *Prometheus) Increment(name string, delta int64) {
 }
 
 func (p *Prometheus) counter(name string) prometheus.Counter {
+	p.mu.RLock()
+	existing, known := p.counters[name]
+	p.mu.RUnlock()
+	if known {
+		return existing
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

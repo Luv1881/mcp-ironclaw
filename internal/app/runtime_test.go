@@ -31,13 +31,13 @@ func TestNewRejectsInvalidDeviceCount(t *testing.T) {
 	config := testConfig()
 	config.Devices = 0
 
-	if _, err := app.New(config); !errors.Is(err, app.ErrInvalidDeviceCount) {
+	if _, err := app.NewWithContext(context.Background(), config); !errors.Is(err, app.ErrInvalidDeviceCount) {
 		t.Fatalf("got %v, want ErrInvalidDeviceCount", err)
 	}
 }
 
 func TestRuntimeFeedsReadableStateThroughEveryStage(t *testing.T) {
-	runtime, err := app.New(testConfig())
+	runtime, err := app.NewWithContext(context.Background(), testConfig())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestRuntimeFeedsReadableStateThroughEveryStage(t *testing.T) {
 }
 
 func TestRuntimeAppliesResetCommandAsynchronously(t *testing.T) {
-	runtime, err := app.New(testConfig())
+	runtime, err := app.NewWithContext(context.Background(), testConfig())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestRuntimeAppliesResetCommandAsynchronously(t *testing.T) {
 }
 
 func TestRuntimeCommandsRejectInvalidPayloads(t *testing.T) {
-	runtime, err := app.New(testConfig())
+	runtime, err := app.NewWithContext(context.Background(), testConfig())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

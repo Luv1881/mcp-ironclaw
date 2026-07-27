@@ -10,7 +10,7 @@ import (
 )
 
 func TestStopIsIdempotentAndSafeFromManyGoroutines(t *testing.T) {
-	instance, err := app.New(testConfig())
+	instance, err := app.NewWithContext(context.Background(), testConfig())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestStopDoesNotLeakTheContextWatcherGoroutine(t *testing.T) {
 	before := runtime.NumGoroutine()
 
 	for i := 0; i < 3; i++ {
-		instance, err := app.New(testConfig())
+		instance, err := app.NewWithContext(context.Background(), testConfig())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -69,7 +69,7 @@ func TestStopDoesNotLeakTheContextWatcherGoroutine(t *testing.T) {
 }
 
 func TestStartAfterParentCancellationStillShutsDownCleanly(t *testing.T) {
-	instance, err := app.New(testConfig())
+	instance, err := app.NewWithContext(context.Background(), testConfig())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -19,6 +19,8 @@ type Sketch struct {
 	gamma            float64
 	logGamma         float64
 	buckets          map[int]int64
+	sorted           []int
+	sortedStale      bool
 	zeroCount        int64
 	count            int64
 	sum              int64
@@ -74,7 +76,30 @@ func (s *Sketch) Add(value int64) {
 		s.zeroCount++
 		return
 	}
-	s.buckets[s.index(value)]++
+
+	index := s.index(value)
+	if _, existing := s.buckets[index]; !existing {
+		s.sortedStale = true
+	}
+	s.buckets[index]++
+}
+
+func (s *Sketch) sortedIndexes() []int {
+	if !s.sortedStale && s.sorted != nil {
+		return s.sorted
+	}
+
+	if cap(s.sorted) < len(s.buckets) {
+		s.sorted = make([]int, 0, len(s.buckets))
+	}
+	s.sorted = s.sorted[:0]
+	for index := range s.buckets {
+		s.sorted = append(s.sorted, index)
+	}
+	sort.Ints(s.sorted)
+	s.sortedStale = false
+
+	return s.sorted
 }
 
 func (s *Sketch) index(value int64) int {
@@ -98,6 +123,9 @@ func (s *Sketch) Merge(other *Sketch) error {
 	}
 
 	for index, count := range other.buckets {
+		if _, existing := s.buckets[index]; !existing {
+			s.sortedStale = true
+		}
 		s.buckets[index] += count
 	}
 	s.zeroCount += other.zeroCount
@@ -125,14 +153,8 @@ func (s *Sketch) Quantile(q float64) (int64, error) {
 		return 0, nil
 	}
 
-	indexes := make([]int, 0, len(s.buckets))
-	for index := range s.buckets {
-		indexes = append(indexes, index)
-	}
-	sort.Ints(indexes)
-
 	cumulative := s.zeroCount
-	for _, index := range indexes {
+	for _, index := range s.sortedIndexes() {
 		cumulative += s.buckets[index]
 		if cumulative > rank {
 			return s.value(index), nil

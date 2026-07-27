@@ -60,12 +60,3 @@ func TestRequireTLSRejectsEmptyDSN(t *testing.T) {
 		t.Fatalf("got %v, want ErrEmptyDSN", err)
 	}
 }
-
-func TestTLSEnabledReportsPlaintextDSNs(t *testing.T) {
-	if postgresstore.TLSEnabled("postgres://u:p@host:5432/db?sslmode=disable") {
-		t.Fatal("sslmode=disable must not report TLS as enabled")
-	}
-	if !postgresstore.TLSEnabled("postgres://u:p@host:5432/db?sslmode=verify-full") {
-		t.Fatal("sslmode=verify-full must report TLS as enabled")
-	}
-}

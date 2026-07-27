@@ -203,3 +203,79 @@ func TestSketchHandlesEmptyAndNonPositiveValues(t *testing.T) {
 		t.Fatalf("median %d, want 0", median)
 	}
 }
+
+func TestQuantileReflectsBucketsAddedAfterAnEarlierQuantile(t *testing.T) {
+	sketch, err := aggregate.NewSketch(0.01)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		sketch.Add(1_000_000)
+	}
+
+	first, err := sketch.Quantile(0.99)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		sketch.Add(900_000_000)
+	}
+
+	second, err := sketch.Quantile(0.99)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if second <= first {
+		t.Fatalf("p99 stayed at %d after adding much slower samples (was %d); a cached bucket ordering went stale", second, first)
+	}
+}
+
+func TestQuantileReflectsBucketsIntroducedByMerge(t *testing.T) {
+	build := func() *aggregate.Sketch {
+		sketch, err := aggregate.NewSketch(0.01)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return sketch
+	}
+
+	merged := build()
+	reference := build()
+	middle := build()
+
+	for i := 0; i < 100; i++ {
+		merged.Add(1_000_000)
+		merged.Add(900_000_000)
+		reference.Add(1_000_000)
+		reference.Add(900_000_000)
+	}
+
+	if _, err := merged.Quantile(0.5); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for i := 0; i < 800; i++ {
+		middle.Add(50_000_000)
+		reference.Add(50_000_000)
+	}
+
+	if err := merged.Merge(middle); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := merged.Quantile(0.5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want, err := reference.Quantile(0.5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got != want {
+		t.Fatalf("merged p50 is %d but the same samples added directly give %d; Merge did not invalidate the cached bucket ordering", got, want)
+	}
+}

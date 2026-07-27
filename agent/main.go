@@ -226,7 +226,8 @@ func encodeBatch(batch domain.Batch) ([]byte, error) {
 		Events:   make([]wireEvent, 0, batch.Len()),
 	}
 
-	for _, event := range batch.Events {
+	for i := range batch.Events {
+		event := &batch.Events[i]
 		payload.Events = append(payload.Events, wireEvent{
 			UserID:              event.UserID,
 			ProcessID:           event.ProcessID,
