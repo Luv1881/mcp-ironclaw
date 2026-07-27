@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ironclaw/mcp-ironclaw/internal/mcpserver"
 	"github.com/ironclaw/mcp-ironclaw/internal/store"
@@ -118,5 +119,77 @@ func TestASliceValuedOutputSurvivesAnErrorResult(t *testing.T) {
 	text := callExpectingToolError(t, session, "get_user_devices", map[string]any{"user_id": "user-000"})
 	if !strings.Contains(text, "device lister") {
 		t.Fatalf("expected the absent-dependency reason, got %q", text)
+	}
+}
+
+type nestedPayload struct {
+	Labels map[string]string `json:"labels"`
+	Items  []string          `json:"items"`
+}
+
+type nestedOutput struct {
+	Name    string           `json:"name"`
+	Nested  nestedPayload    `json:"nested"`
+	Pointed *nestedPayload   `json:"pointed"`
+	Top     map[string]int64 `json:"top"`
+	List    []int            `json:"list"`
+	Deep    [][]string       `json:"deep"`
+}
+
+type selfReferential struct {
+	Next  *selfReferential  `json:"next"`
+	Names map[string]string `json:"names"`
+}
+
+func TestSchemaZeroFillsNestedAndPointedCollections(t *testing.T) {
+	zero := mcpserver.SchemaZeroForTest[nestedOutput]()
+
+	if zero.Top == nil {
+		t.Fatal("a top-level map field was left nil")
+	}
+	if zero.List == nil {
+		t.Fatal("a top-level slice field was left nil")
+	}
+	if zero.Nested.Labels == nil || zero.Nested.Items == nil {
+		t.Fatal("collections inside a nested struct were left nil")
+	}
+	if zero.Pointed == nil {
+		t.Fatal("a pointer field was left nil, so its schema object serialises as null")
+	}
+	if zero.Pointed.Labels == nil || zero.Pointed.Items == nil {
+		t.Fatal("collections behind a pointer were left nil")
+	}
+	if zero.Deep == nil {
+		t.Fatal("a slice of slices was left nil")
+	}
+}
+
+func TestSchemaZeroTerminatesOnSelfReferentialTypes(t *testing.T) {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		zero := mcpserver.SchemaZeroForTest[selfReferential]()
+		if zero.Names == nil {
+			t.Error("the top-level map was left nil")
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("schemaZero did not terminate on a self-referential type")
+	}
+}
+
+func TestSchemaZeroLeavesNonStructOutputsUsable(t *testing.T) {
+	if got := mcpserver.SchemaZeroForTest[map[string]int](); got == nil {
+		t.Fatal("a map-typed output was left nil")
+	}
+	if got := mcpserver.SchemaZeroForTest[[]string](); got == nil {
+		t.Fatal("a slice-typed output was left nil")
+	}
+	if got := mcpserver.SchemaZeroForTest[string](); got != "" {
+		t.Fatalf("a scalar output was mangled to %q", got)
 	}
 }

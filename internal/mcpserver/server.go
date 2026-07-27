@@ -61,27 +61,35 @@ func wrap[In, Out any](handler func(context.Context, In) (Out, error)) mcp.ToolH
 func schemaZero[Out any]() Out {
 	var zero Out
 
-	value := reflect.ValueOf(&zero).Elem()
-	if value.Kind() != reflect.Struct {
-		return zero
-	}
-
-	for i := 0; i < value.NumField(); i++ {
-		field := value.Field(i)
-		if !field.CanSet() {
-			continue
-		}
-		switch field.Kind() {
-		case reflect.Map:
-			if field.IsNil() {
-				field.Set(reflect.MakeMap(field.Type()))
-			}
-		case reflect.Slice:
-			if field.IsNil() {
-				field.Set(reflect.MakeSlice(field.Type(), 0, 0))
-			}
-		}
-	}
+	fillEmptyCollections(reflect.ValueOf(&zero).Elem(), 0)
 
 	return zero
+}
+
+const maxSchemaDepth = 8
+
+func fillEmptyCollections(value reflect.Value, depth int) {
+	if depth > maxSchemaDepth || !value.CanSet() {
+		return
+	}
+
+	switch value.Kind() {
+	case reflect.Map:
+		if value.IsNil() {
+			value.Set(reflect.MakeMap(value.Type()))
+		}
+	case reflect.Slice:
+		if value.IsNil() {
+			value.Set(reflect.MakeSlice(value.Type(), 0, 0))
+		}
+	case reflect.Pointer:
+		if value.IsNil() {
+			value.Set(reflect.New(value.Type().Elem()))
+		}
+		fillEmptyCollections(value.Elem(), depth+1)
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			fillEmptyCollections(value.Field(i), depth+1)
+		}
+	}
 }

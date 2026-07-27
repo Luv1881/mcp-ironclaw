@@ -12,7 +12,7 @@ const watchBuffer = 8
 
 type watcher struct {
 	updates chan domain.DeviceState
-	done    chan struct{}
+	closed  bool
 }
 
 func (m *Memory) WatchDevice(ctx context.Context, userID, deviceID string) (<-chan domain.DeviceState, error) {
@@ -23,10 +23,7 @@ func (m *Memory) WatchDevice(ctx context.Context, userID, deviceID string) (<-ch
 		return nil, ErrDeviceNotFound
 	}
 
-	subscriber := &watcher{
-		updates: make(chan domain.DeviceState, watchBuffer),
-		done:    make(chan struct{}),
-	}
+	subscriber := &watcher{updates: make(chan domain.DeviceState, watchBuffer)}
 	key := deviceKey(userID, deviceID)
 
 	m.mu.Lock()
@@ -60,10 +57,8 @@ func (m *Memory) unwatch(key string, subscriber *watcher) {
 		m.watchers[key] = remaining
 	}
 
-	select {
-	case <-subscriber.done:
-	default:
-		close(subscriber.done)
+	if !subscriber.closed {
+		subscriber.closed = true
 		close(subscriber.updates)
 	}
 }
@@ -71,7 +66,6 @@ func (m *Memory) unwatch(key string, subscriber *watcher) {
 func (m *Memory) notify(key string, state domain.DeviceState) {
 	for _, subscriber := range m.watchers[key] {
 		select {
-		case <-subscriber.done:
 		case subscriber.updates <- state:
 		default:
 			m.metrics[MetricWatchDropped]++

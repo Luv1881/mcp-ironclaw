@@ -102,10 +102,14 @@ func (l *Locker) Guard(ctx context.Context, lease domain.Lease) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	current, ok := l.held[lease.Resource]
+	if !ok || current.token != lease.Token {
+		return ErrLeaseSuperseded
+	}
 	if l.fences[lease.Resource] > lease.Token {
 		return ErrLeaseSuperseded
 	}
-	if l.clock.Now().After(lease.ExpiresAt) {
+	if !l.clock.Now().Before(current.expiresAt) {
 		return ErrLeaseSuperseded
 	}
 
