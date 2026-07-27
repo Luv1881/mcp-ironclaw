@@ -99,6 +99,10 @@ func (a *Aggregator) Shed() int64 {
 func (a *Aggregator) OpenWindows() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.heldWindows()
+}
+
+func (a *Aggregator) heldWindows() int {
 	return len(a.open) + len(a.pending)
 }
 
@@ -117,7 +121,7 @@ func (a *Aggregator) Ingest(event domain.Event) error {
 
 	state, ok := a.open[key]
 	if !ok {
-		if a.config.MaxOpenWindows > 0 && len(a.open) >= a.config.MaxOpenWindows {
+		if a.config.MaxOpenWindows > 0 && a.heldWindows() >= a.config.MaxOpenWindows {
 			a.shed++
 			return ErrTooManyKeys
 		}

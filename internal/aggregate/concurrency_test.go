@@ -259,3 +259,44 @@ func TestBatchSurvivesShedEvents(t *testing.T) {
 		t.Fatalf("shed %d, want 3", aggregator.Shed())
 	}
 }
+
+func TestUncommittedWindowsCountAgainstTheKeyCeiling(t *testing.T) {
+	const ceiling = 10
+
+	aggregator, err := aggregate.New(aggregate.Config{
+		WindowSize:     windowSize,
+		MaxOpenWindows: ceiling,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for i := 0; i < ceiling; i++ {
+		if err := aggregator.Ingest(event(int32(i), windowBase, time.Millisecond, false)); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	collected, err := aggregator.CollectAll()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(collected) != ceiling {
+		t.Fatalf("collected %d windows, want %d", len(collected), ceiling)
+	}
+
+	if got := aggregator.OpenWindows(); got != ceiling {
+		t.Fatalf("after an uncommitted collect the aggregator holds %d windows, want %d", got, ceiling)
+	}
+
+	for i := ceiling; i < ceiling*3; i++ {
+		err := aggregator.Ingest(event(int32(i), windowBase, time.Millisecond, false))
+		if err != nil && !errors.Is(err, aggregate.ErrTooManyKeys) {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	if got := aggregator.OpenWindows(); got > ceiling {
+		t.Fatalf("the aggregator holds %d windows against a ceiling of %d: windows awaiting commit do not count, so a stalled publisher grows memory without bound", got, ceiling)
+	}
+}
