@@ -2,6 +2,7 @@ bin/
 deploy/build/
 /ironclaw-mcp
 *.test
+testdata/fuzz/
 coverage.out
 coverage.html
 
