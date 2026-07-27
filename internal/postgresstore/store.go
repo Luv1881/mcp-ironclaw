@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/ironclaw/mcp-ironclaw/internal/domain"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -242,7 +244,64 @@ func (s *Store) EnsurePartition(ctx context.Context, day time.Time) error {
 		end.Format("2006-01-02 15:04:05Z07:00"))
 
 	if _, err := s.pool.Exec(ctx, statement); err != nil {
-		return fmt.Errorf("postgresstore: creating partition for %s: %w", start.Format("2006-01-02"), err)
+		if !defaultPartitionBlocked(err) {
+			return fmt.Errorf("postgresstore: creating partition for %s: %w", start.Format("2006-01-02"), err)
+		}
+		if err := s.adoptFromDefaultPartition(ctx, start, end); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func defaultPartitionBlocked(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.CheckViolation
+}
+
+func (s *Store) adoptFromDefaultPartition(ctx context.Context, start, end time.Time) error {
+	transaction, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgresstore: starting partition migration: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+
+	steps := []string{
+		"ALTER TABLE aggregate_windows DETACH PARTITION aggregate_windows_default",
+		fmt.Sprintf(ensurePartition,
+			partitionName(start),
+			start.Format("2006-01-02 15:04:05Z07:00"),
+			end.Format("2006-01-02 15:04:05Z07:00")),
+	}
+
+	for _, step := range steps {
+		if _, err := transaction.Exec(ctx, step); err != nil {
+			return fmt.Errorf("postgresstore: migrating rows out of the default partition: %w", err)
+		}
+	}
+
+	if _, err := transaction.Exec(ctx, `
+        INSERT INTO aggregate_windows
+        SELECT * FROM aggregate_windows_default
+        WHERE window_start >= $1 AND window_start < $2
+        ON CONFLICT DO NOTHING`, start, end); err != nil {
+		return fmt.Errorf("postgresstore: moving rows into the new partition: %w", err)
+	}
+
+	if _, err := transaction.Exec(ctx, `
+        DELETE FROM aggregate_windows_default
+        WHERE window_start >= $1 AND window_start < $2`, start, end); err != nil {
+		return fmt.Errorf("postgresstore: clearing migrated rows: %w", err)
+	}
+
+	if _, err := transaction.Exec(ctx,
+		"ALTER TABLE aggregate_windows ATTACH PARTITION aggregate_windows_default DEFAULT"); err != nil {
+		return fmt.Errorf("postgresstore: reattaching the default partition: %w", err)
+	}
+
+	if err := transaction.Commit(ctx); err != nil {
+		return fmt.Errorf("postgresstore: committing partition migration: %w", err)
 	}
 
 	return nil

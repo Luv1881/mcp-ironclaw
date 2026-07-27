@@ -3,6 +3,7 @@ package redisstore_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -203,5 +204,79 @@ func TestRedisLockUnderConcurrentContention(t *testing.T) {
 
 	if len(leases) != 1 {
 		t.Fatalf("%d contenders acquired the lock, want exactly 1", len(leases))
+	}
+}
+
+func TestApplyAndResetKeysShareOneClusterSlot(t *testing.T) {
+	store := newStore(t)
+
+	tag := func(key string) string {
+		open := strings.Index(key, "{")
+		close := strings.Index(key, "}")
+		if open < 0 || close < open {
+			return ""
+		}
+		return key[open : close+1]
+	}
+
+	scripts := map[string][]string{
+		"apply": store.ApplyScriptKeys("slot-user", "device-000"),
+		"reset": store.ResetScriptKeys("slot-user", "device-000"),
+		"lock":  store.LockScriptKeys("owner:device-000"),
+	}
+
+	for name, keys := range scripts {
+		want := tag(keys[0])
+		if want == "" {
+			t.Fatalf("%s: key %q carries no hash tag, so a cluster cannot co-locate it", name, keys[0])
+		}
+		for _, key := range keys {
+			if got := tag(key); got != want {
+				t.Fatalf("%s: key %q has hash tag %q, want %q — a Redis Cluster would refuse this script with CROSSSLOT", name, key, got, want)
+			}
+		}
+	}
+}
+
+func TestResetIsAtomicAgainstConcurrentApplies(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+
+	if err := store.ApplyWindow(ctx, window("race-user", "device-000", 1, 1, 10)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var wait sync.WaitGroup
+	start := make(chan struct{})
+
+	wait.Add(1)
+	go func() {
+		defer wait.Done()
+		<-start
+		for i := 2; i < 40; i++ {
+			_ = store.ApplyWindow(ctx, window("race-user", "device-000", 1, int64(i), 5))
+		}
+	}()
+
+	wait.Add(1)
+	go func() {
+		defer wait.Done()
+		<-start
+		for i := 0; i < 20; i++ {
+			if err := store.ResetDevice(ctx, "race-user", "device-000"); err != nil {
+				return
+			}
+		}
+	}()
+
+	close(start)
+	wait.Wait()
+
+	state, err := store.DeviceState(ctx, "race-user", "device-000")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state.Count < 0 {
+		t.Fatalf("count went negative under concurrent reset and apply: %d", state.Count)
 	}
 }

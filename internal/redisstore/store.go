@@ -56,7 +56,10 @@ local incomingCount = tonumber(ARGV[3])
 
 if incoming > current then
   redis.call('HSET', KEYS[1], 'last_window_id', ARGV[8], 'p95_nanos', ARGV[6], 'p99_nanos', ARGV[7],
-             'last_seen', ARGV[9], 'percentile_sample', ARGV[3])
+             'percentile_sample', ARGV[3])
+  if ARGV[9] ~= '' then
+    redis.call('HSET', KEYS[1], 'last_seen', ARGV[9])
+  end
 elseif incoming == current then
   local sample = tonumber(redis.call('HGET', KEYS[1], 'percentile_sample') or '0')
   if incomingCount > sample then
@@ -68,6 +71,24 @@ elseif incoming == current then
 end
 
 redis.call('SPUBLISH', KEYS[4], ARGV[8])
+
+return 1
+`)
+
+var resetDevice = redis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return 0
+end
+
+redis.call('HSET', KEYS[1],
+  'count', 0,
+  'error_count', 0,
+  'bytes', 0,
+  'p95_nanos', 0,
+  'p99_nanos', 0,
+  'percentile_sample', 0)
+
+redis.call('SPUBLISH', KEYS[2], 'reset')
 
 return 1
 `)
@@ -262,28 +283,16 @@ func (s *Store) IncrementInRedis(name string, delta int64) {
 }
 
 func (s *Store) ResetDevice(ctx context.Context, userID, deviceID string) error {
-	key := s.stateKey(userID, deviceID)
+	keys := []string{s.stateKey(userID, deviceID), s.updatesChannel(userID, deviceID)}
 
-	exists, err := s.client.Exists(ctx, key).Result()
+	reset, err := resetDevice.Run(ctx, s.client, keys).Int64()
 	if err != nil {
-		return fmt.Errorf("redisstore: checking device: %w", err)
+		return fmt.Errorf("redisstore: resetting device: %w", err)
 	}
-	if exists == 0 {
+	if reset == 0 {
 		return ErrDeviceNotFound
 	}
 
-	if err := s.client.HSet(ctx, key,
-		"count", 0,
-		"error_count", 0,
-		"bytes", 0,
-		"p95_nanos", 0,
-		"p99_nanos", 0,
-		"percentile_sample", 0,
-	).Err(); err != nil {
-		return fmt.Errorf("redisstore: resetting device: %w", err)
-	}
-
-	s.client.SPublish(ctx, s.updatesChannel(userID, deviceID), "reset")
 	s.Increment(MetricDeviceResets, 1)
 
 	return nil
