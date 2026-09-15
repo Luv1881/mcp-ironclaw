@@ -76,7 +76,19 @@ A JMeter run against the real edge (`make loadtest`, 20 device certificates, 100
 | Duplicate emissions in Postgres | 0 |
 | Time to drain the backlog after the run | ~45 s |
 
-Note the drain time: Redis reaches exact reconciliation about 45 s after the load stops, because the aggregator is still working through consumer lag. Measuring immediately after a run understates the count and looks like loss. The freshness SLO (p99 under 5 s) has **not** been measured — that needs per-event timestamping from agent send to Redis visibility, which this harness does not yet do.
+Note the drain time: Redis reaches exact reconciliation about 45 s after the load stops, because the aggregator is still working through consumer lag. Measuring immediately after a run understates the count and looks like loss. Freshness is measured separately by `make freshness`, which timestamps each batch and polls Redis until it appears — see the chaos table below.
+
+**Re-verified end to end.** The same harness was run again after the review sweep that fixed the sketch bound, the byte validation and the spool durability, against a flushing Redis and a truncated archive so the delta was unambiguous:
+
+| Measure | Result |
+| --- | --- |
+| Batches accepted | 2,754 (4 client-side ramp resets that never reached the edge) |
+| Events ingested | 275,400 = 2,754 × 100 |
+| Events counted in Redis | 275,400 — **exact reconciliation, zero loss** |
+| Windows emitted / applied / archived to Postgres | 2,488 / 2,488 / 2,488 |
+| Freshness p50 / p95 / p99 | 984 ms / 1.016 s / 1.016 s, 0 lost samples |
+
+The four JMeter failures are worth recording because of what they are not: they are `java.io.IOException` on the client during ramp, with no corresponding entry in the HAProxy or ingest logs, and they are exactly the gap between batches attempted and batches accepted. Nothing was acked and lost. `loadtest/out/results/run.jtl` is **appended to across runs**, so a naive count of failing rows in that file mixes runs together — the numbers above were taken from the run's own timestamp window.
 
 **A certificate with no CN cannot reach the backend unidentified — tested.** A certificate signed by the real CA but carrying no Common Name (`subject=O=IronClaw, OU=devices`) was used to attack the live edge while supplying `X-Device-Id: device-000`. The edge answered **401** and the spoofed identity did not survive; a legitimate device certificate on the same edge answered 202. The original config was already safe here — HAProxy's `set-header` writes an empty value rather than skipping when the sample fetch yields nothing, so the client's header is replaced either way — but the edge now deletes both identity headers before setting them and denies any request that reaches the rules without an identity, so the property no longer depends on that behaviour.
 

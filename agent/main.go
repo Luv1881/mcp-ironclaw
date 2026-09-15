@@ -97,30 +97,77 @@ func run(opts options) error {
 
 	metrics := store.NewMemory()
 
-	tracer, err := tracing.New(ctx, tracing.Config{
+	tracer, err := startTracing(ctx, opts)
+	if err != nil {
+		return err
+	}
+	defer func() { stopTracing(ctx, tracer) }()
+
+	queue, err := openSpool(opts)
+	if err != nil {
+		return err
+	}
+
+	shipper, err := newShipper(opts, queue, metrics)
+	if err != nil {
+		return err
+	}
+
+	settings, err := opts.captureSettings()
+	if err != nil {
+		return err
+	}
+
+	source, err := newCaptureSource(settings)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = source.Close() }()
+
+	batcher, err := newBatcher(opts)
+	if err != nil {
+		return err
+	}
+
+	if queue != nil {
+		go shipper.Drain(ctx)
+	}
+	go report(ctx, opts.reportEvery, batcher, queue)
+
+	log.Printf("agent %s capturing %s and streaming to %s (spool=%v)", opts.deviceID, opts.capture, opts.endpoint, queue != nil)
+
+	if err := batcher.Run(ctx, source, transport.NewTraced(shipper, tracer)); err != nil && ctx.Err() == nil {
+		return err
+	}
+
+	logStats(batcher, queue)
+
+	return nil
+}
+
+func startTracing(ctx context.Context, opts options) (*tracing.Provider, error) {
+	return tracing.New(ctx, tracing.Config{
 		ServiceName: "ironclaw-agent",
 		Endpoint:    opts.otlpEndpoint,
 		SampleRatio: opts.sampleRatio,
 	})
-	if err != nil {
-		return err
-	}
-	defer func() {
-		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		_ = tracer.Shutdown(shutdown)
-	}()
+}
 
-	var queue *spool.Spool
-	if opts.spoolDir != "" {
-		opened, err := spool.Open(opts.spoolDir, opts.spoolBytes)
-		if err != nil {
-			return err
-		}
-		queue = opened
-	}
+func stopTracing(ctx context.Context, tracer *tracing.Provider) {
+	shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = tracer.Shutdown(shutdown)
+}
 
-	shipperHTTPS, err := transport.NewHTTPS(transport.HTTPSConfig{
+func openSpool(opts options) (*spool.Spool, error) {
+	if opts.spoolDir == "" {
+		return nil, nil
+	}
+	return spool.Open(opts.spoolDir, opts.spoolBytes)
+}
+
+func newShipper(opts options, queue *spool.Spool, metrics domain.MetricsRecorder) (*transport.HTTPS, error) {
+	return transport.NewHTTPS(transport.HTTPSConfig{
 		Endpoint:    opts.endpoint,
 		ServerName:  opts.serverName,
 		CertFile:    opts.certFile,
@@ -132,64 +179,41 @@ func run(opts options) error {
 		MaxBackoff:  opts.maxBackoff,
 		Metrics:     metrics,
 	})
-	if err != nil {
-		return err
-	}
+}
 
-	shipper := transport.NewTraced(shipperHTTPS, tracer)
-
-	sampleModulus, err := narrowUint32("sample modulus", opts.sampleModulus)
-	if err != nil {
-		return err
-	}
-	targetTGID, err := narrowUint32("target tgid", opts.targetTGID)
-	if err != nil {
-		return err
-	}
-
-	source, err := newCaptureSource(captureSettings{
-		mode:            opts.capture,
-		deviceID:        opts.deviceID,
-		userID:          opts.userID,
-		podID:           opts.podID,
-		events:          opts.events,
-		interval:        opts.interval,
-		tailFraction:    opts.tailFraction,
-		minLatency:      opts.minLatency,
-		maxEventsPerCPU: opts.maxEventsPerCPU,
-		sampleModulus:   sampleModulus,
-		targetTGID:      targetTGID,
-	})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = source.Close() }()
-
-	batcher, err := pipeline.NewBatcher(pipeline.BatcherConfig{
+func newBatcher(opts options) (*pipeline.Batcher, error) {
+	return pipeline.NewBatcher(pipeline.BatcherConfig{
 		DeviceID:    opts.deviceID,
 		MaxEvents:   opts.batchSize,
 		MaxInterval: opts.batchWindow,
 		QueueDepth:  opts.queueDepth,
 		Policy:      pipeline.OverflowDropOldest,
 	})
+}
+
+func (o options) captureSettings() (captureSettings, error) {
+	sampleModulus, err := narrowUint32("sample modulus", o.sampleModulus)
 	if err != nil {
-		return err
+		return captureSettings{}, err
+	}
+	targetTGID, err := narrowUint32("target tgid", o.targetTGID)
+	if err != nil {
+		return captureSettings{}, err
 	}
 
-	if queue != nil {
-		go shipperHTTPS.Drain(ctx)
-	}
-	go report(ctx, opts.reportEvery, batcher, queue)
-
-	log.Printf("agent %s capturing %s and streaming to %s (spool=%v)", opts.deviceID, opts.capture, opts.endpoint, queue != nil)
-
-	if err := batcher.Run(ctx, source, shipper); err != nil && ctx.Err() == nil {
-		return err
-	}
-
-	logStats(batcher, queue)
-
-	return nil
+	return captureSettings{
+		mode:            o.capture,
+		deviceID:        o.deviceID,
+		userID:          o.userID,
+		podID:           o.podID,
+		events:          o.events,
+		interval:        o.interval,
+		tailFraction:    o.tailFraction,
+		minLatency:      o.minLatency,
+		maxEventsPerCPU: o.maxEventsPerCPU,
+		sampleModulus:   sampleModulus,
+		targetTGID:      targetTGID,
+	}, nil
 }
 
 func report(ctx context.Context, every time.Duration, batcher *pipeline.Batcher, queue *spool.Spool) {

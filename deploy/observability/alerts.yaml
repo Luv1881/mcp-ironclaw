@@ -111,6 +111,19 @@ spec:
               windows were kept rather than destroyed. Sustained retention means the publish
               path is broken, not merely flaky.
 
+        - alert: AggregationSheddingKeys
+          expr: sum(rate(ironclaw_aggregator_events_shed_total[10m])) > 0
+          for: 15m
+          labels:
+            severity: ticket
+          annotations:
+            summary: The key ceiling is dropping events to protect memory
+            description: >-
+              Held correlation keys reached -max-open-windows and further events are
+              being discarded. The ceiling is doing its job, but the work it is shedding is
+              real telemetry: either the fleet key space grew or a device is inventing
+              process ids. This counter exists because the ceiling was previously invisible.
+
         - alert: HotStateWritesStopped
           expr: |
             sum(rate(ironclaw_aggregator_windows_emitted_total[10m])) > 0

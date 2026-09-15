@@ -113,6 +113,14 @@ Three properties are load-bearing and worth knowing before changing anything:
 make race                   # unit tests under the race detector
 make integration            # adapter suites against live Kafka/Redis/Postgres
 make lint                   # golangci-lint
+make vuln                   # govulncheck against the Go vulnerability database
+```
+
+The agent builds in two capture modes, and CI builds both so the kernel path cannot rot:
+
+```bash
+make agent                  # synthetic capture, no privileges required
+make agent-ebpf             # -tags ebpf, requires clang and CAP_BPF to run
 ```
 
 Integration tests skip with an explanatory message when the containers are not reachable, so `make race` stays green either way.
@@ -129,6 +137,9 @@ Infrastructure-level checks, each requiring the relevant tooling:
 | `make k8s-validate` / `make k8s-up` | Manifests against published schemas / a live kind cluster |
 | `make tf-validate` | `terraform fmt -check` and `terraform validate` |
 | `make ironclaw-verify` | The IronClaw extension contract: TLS, bearer injection, tool catalogue against the manifest's `max_tools`, tenant isolation, session binding |
+| `make vuln` | No reachable vulnerabilities in the standard library or the module graph |
+
+CI runs the race suite, lint with the `ebpf` build tag, the adapter suites against real Kafka/Redis/Postgres, the manifest and Terraform validation, `govulncheck`, and the IronClaw contract suite.
 
 ## Security
 
@@ -169,7 +180,8 @@ The pipeline, adapters, edge, Kubernetes manifests and load path have all been e
 
 Known gaps, stated plainly:
 
-- eBPF programs compile and their decoder is tested, but **attaching requires `CAP_BPF`** and has not been executed in the development environment. The agent ships a synthetic source behind the same `EventSource` port. The kernel/userspace record contract is now *derived* rather than asserted: a test parses `struct event` out of the C source, computes its C layout with alignment and padding, and checks the decoder's size and every field offset against it. That test was written after it caught a real 40-vs-48 byte mismatch which would have rejected every kernel record on first attach.
+- eBPF programs compile and their decoder is tested, but **attaching requires `CAP_BPF`** and has not been executed in the development environment. The agent selects its source with `-capture`: `synthetic` is the default and needs no privileges; `ebpf` loads the kernel programs through the same `EventSource` port. Both are built and tested — `make agent` and `make agent-ebpf` — and the eBPF path has been driven far enough to prove it reaches the loader, failing on the kernel memlock limit exactly as an unprivileged host must. The kernel/userspace record contract is *derived* rather than asserted: a test parses `struct event` out of the C source, computes its C layout with alignment and padding, and checks the decoder's size and every field offset against it. That test was written after it caught a real 40-vs-48 byte mismatch which would have rejected every kernel record on first attach.
+- **The user a device reports is self-attested.** Device identity is pinned to the certificate CN and pod identity is stamped by ingest, but `user_id` arrives in the batch body, so a device holding a valid certificate can attribute its telemetry to another tenant. Closing this needs a device-to-user binding at ingest — a registry lookup or a claim in the certificate — and no such source exists yet. Treat the ingest write path as trusted-network until it does. The identifier delimiters that build correlation keys (`{`, `}`, `:`) are part of the same boundary: a user id containing them can collide with another key's string, so a deployment that also binds users should reject them at the edge.
 - The fencing lock is implemented and tested, but **no feature consumes it yet** — device ownership reassignment and quarantine are unbuilt.
 - Grafana and Prometheus **provisioning** is not built. The dashboard and rules validate and every metric name they reference was cross-checked against a live scrape, but neither has been loaded into a running Grafana here.
 - Cross-region active-active is designed but **multi-region convergence is untested**.

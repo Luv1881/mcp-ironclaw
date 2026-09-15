@@ -152,7 +152,7 @@ func (d *Dependencies) closeExtras() {
 func buildState(ctx context.Context, config Config, deps *Dependencies) error {
 	if config.Backends.RedisAddr == "" {
 		memory := store.NewMemory()
-		deps.State = stateWithExtraRecorder{StateBackend: memory, recorder: metrics.NewFanout(memory, config.MetricsRecorder)}
+		deps.State = stateWithRecorder{StateBackend: memory, recorder: metrics.NewFanout(memory, config.MetricsRecorder)}
 		return nil
 	}
 
@@ -180,7 +180,7 @@ func buildState(ctx context.Context, config Config, deps *Dependencies) error {
 	recorder := metrics.NewFanout(async, config.MetricsRecorder)
 	state.AttachRecorder(recorder)
 
-	deps.State = stateWithAsyncMetrics{Store: state, recorder: recorder}
+	deps.State = stateWithRecorder{StateBackend: state, recorder: recorder}
 	deps.Extra = append(deps.Extra, async.Close)
 	deps.Extra = append(deps.Extra, func() { _ = client.Close() })
 	deps.Describing = "redis"
@@ -329,20 +329,11 @@ func handlerErrorLogger(deps *Dependencies) func(string, int, error) {
 	}
 }
 
-type stateWithExtraRecorder struct {
+type stateWithRecorder struct {
 	StateBackend
 	recorder domain.MetricsRecorder
 }
 
-func (s stateWithExtraRecorder) Increment(name string, delta int64) {
-	s.recorder.Increment(name, delta)
-}
-
-type stateWithAsyncMetrics struct {
-	*redisstore.Store
-	recorder domain.MetricsRecorder
-}
-
-func (s stateWithAsyncMetrics) Increment(name string, delta int64) {
+func (s stateWithRecorder) Increment(name string, delta int64) {
 	s.recorder.Increment(name, delta)
 }

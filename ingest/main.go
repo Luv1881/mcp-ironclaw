@@ -79,19 +79,11 @@ func run(opts options) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	tracer, err := tracing.New(ctx, tracing.Config{
-		ServiceName: "ironclaw-ingest",
-		Endpoint:    opts.otlpEndpoint,
-		SampleRatio: opts.sampleRatio,
-	})
+	tracer, err := startTracing(ctx, opts)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		_ = tracer.Shutdown(shutdown)
-	}()
+	defer func() { stopTracing(ctx, tracer) }()
 
 	registry := prometheus.NewRegistry()
 	promRecorder, err := ironmetrics.NewPrometheus(registry)
@@ -107,89 +99,19 @@ func run(opts options) error {
 
 	promRecorder.Preregister(ironmetrics.KnownCounters()...)
 
-	metrics := ironmetrics.NewFanout(promRecorder, backing)
+	handler, releaseProducer, err := newBatchHandler(opts, ironmetrics.NewFanout(promRecorder, backing))
+	if err != nil {
+		return err
+	}
+	defer releaseProducer()
 
-	codec, err := wire.For(wire.Format(opts.wireFormat))
+	server, err := newIngestServer(opts, handler.Handler(), tracer)
 	if err != nil {
 		return err
 	}
 
-	producer, err := kafkabus.NewProducer(kafkabus.Config{
-		Brokers: strings.Split(opts.brokers, ","),
-		Topic:   opts.topic,
-		Codec:   codec,
-		Metrics: metrics,
-	})
-	if err != nil {
-		return err
-	}
-	defer producer.Close()
-
-	service, err := ingest.New(producer, metrics)
-	if err != nil {
-		return err
-	}
-
-	handler, err := httpingest.New(httpingest.Config{
-		Acceptor:         service,
-		Metrics:          metrics,
-		AllowedClientCNs: opts.allowedClientCNs(),
-	})
-	if err != nil {
-		return err
-	}
-
-	server := &http.Server{
-		Addr:              opts.addr,
-		Handler:           traced(handler.Handler(), tracer),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-	}
-
-	if opts.certFile != "" {
-		tlsConfig, err := buildTLS(opts)
-		if err != nil {
-			return err
-		}
-		server.TLSConfig = tlsConfig
-	}
-
-	var health *http.Server
-	if opts.healthAddr != "" {
-		mux := http.NewServeMux()
-		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok"))
-		})
-		mux.Handle("GET /metrics", ironmetrics.Handler(registry))
-
-		health = &http.Server{
-			Addr:              opts.healthAddr,
-			Handler:           mux,
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       10 * time.Second,
-			WriteTimeout:      10 * time.Second,
-			IdleTimeout:       2 * time.Minute,
-		}
-
-		go func() {
-			if err := health.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Printf("ingest: health listener stopped: %v", err)
-			}
-		}()
-	}
-
-	go func() {
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		if health != nil {
-			_ = health.Shutdown(shutdown)
-		}
-		_ = server.Shutdown(shutdown)
-	}()
+	health := startHealthServer(opts, registry)
+	shutdownOnSignal(ctx, server, health)
 
 	log.Printf("ingest listening on %s (mtls=%v, topic=%s)", opts.addr, server.TLSConfig != nil, opts.topic)
 
@@ -203,6 +125,122 @@ func run(opts options) error {
 	}
 
 	return nil
+}
+
+func startTracing(ctx context.Context, opts options) (*tracing.Provider, error) {
+	return tracing.New(ctx, tracing.Config{
+		ServiceName: "ironclaw-ingest",
+		Endpoint:    opts.otlpEndpoint,
+		SampleRatio: opts.sampleRatio,
+	})
+}
+
+func stopTracing(ctx context.Context, tracer *tracing.Provider) {
+	shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = tracer.Shutdown(shutdown)
+}
+
+func newBatchHandler(opts options, metrics domain.MetricsRecorder) (*httpingest.Server, func(), error) {
+	codec, err := wire.For(wire.Format(opts.wireFormat))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	producer, err := kafkabus.NewProducer(kafkabus.Config{
+		Brokers: strings.Split(opts.brokers, ","),
+		Topic:   opts.topic,
+		Codec:   codec,
+		Metrics: metrics,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	release := func() { producer.Close() }
+
+	service, err := ingest.New(producer, metrics)
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+
+	handler, err := httpingest.New(httpingest.Config{
+		Acceptor:         service,
+		Metrics:          metrics,
+		AllowedClientCNs: opts.allowedClientCNs(),
+	})
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+
+	return handler, release, nil
+}
+
+func newIngestServer(opts options, handler http.Handler, tracer *tracing.Provider) (*http.Server, error) {
+	server := &http.Server{
+		Addr:              opts.addr,
+		Handler:           traced(handler, tracer),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+
+	if opts.certFile == "" {
+		return server, nil
+	}
+
+	tlsConfig, err := buildTLS(opts)
+	if err != nil {
+		return nil, err
+	}
+	server.TLSConfig = tlsConfig
+
+	return server, nil
+}
+
+func startHealthServer(opts options, registry *prometheus.Registry) *http.Server {
+	if opts.healthAddr == "" {
+		return nil
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.Handle("GET /metrics", ironmetrics.Handler(registry))
+
+	health := &http.Server{
+		Addr:              opts.healthAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+
+	go func() {
+		if err := health.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("ingest: health listener stopped: %v", err)
+		}
+	}()
+
+	return health
+}
+
+func shutdownOnSignal(ctx context.Context, server, health *http.Server) {
+	go func() {
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if health != nil {
+			_ = health.Shutdown(shutdown)
+		}
+		_ = server.Shutdown(shutdown)
+	}()
 }
 
 func buildTLS(opts options) (*tls.Config, error) {

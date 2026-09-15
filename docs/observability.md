@@ -43,6 +43,9 @@ Thresholds are derived from the measured numbers in `docs/availability.md`, not 
 | `IngestErrorBudgetBurningSlow` | 0.1% for 1h | Twice the objective, 20× the measured baseline. |
 | `AggregatorConsumerLagBreachingFreshness` | drain time > 5s for 5m | The freshness SLO is p99 < 5 s. Lag ÷ consumption rate is time-to-drain. Measured drain after a 40 s load run was ~45 s. |
 | `AgentSpoolDroppingBatches` | any rate for 5m | The spool is the designed outage response; only a *full* spool is real loss. |
+| `AggregationSheddingKeys` | any rate for 15m | The key ceiling drops events rather than growing memory without bound. Added after a review found the shed counter existed but nothing read it, so the one path that discards telemetry was invisible. |
+
+Two further counters are recorded but alert on nothing yet: `agent_spool_release_failed` (an unlink that failed, so the batch is still on disk and the byte budget is still charged) and `aggregator_events_shed`'s companion `aggregator_windows_retained`. Both exist so that a failure has a name attached to it rather than only a number.
 
 Every alert that fires on a *ratio* uses `clamp_min(..., 1)` on the denominator so an idle pipeline does not divide by zero into a false page.
 
