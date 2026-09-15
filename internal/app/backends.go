@@ -89,10 +89,23 @@ func (b Backends) redisSecurity() redisstore.Security {
 }
 
 func (b Backends) brokers() []string {
-	if b.KafkaBrokers == "" {
+	return splitTrimmed(b.KafkaBrokers)
+}
+
+func splitTrimmed(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
-	return strings.Split(b.KafkaBrokers, ",")
+
+	parts := strings.Split(raw, ",")
+	brokers := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			brokers = append(brokers, trimmed)
+		}
+	}
+
+	return brokers
 }
 
 func (b Backends) topic(name string) string {

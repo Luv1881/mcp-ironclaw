@@ -46,10 +46,18 @@ type options struct {
 }
 
 func (o options) allowedClientCNs() []string {
-	if o.allowedCNs == "" {
+	if strings.TrimSpace(o.allowedCNs) == "" {
 		return nil
 	}
-	return strings.Split(o.allowedCNs, ",")
+
+	names := make([]string, 0, strings.Count(o.allowedCNs, ",")+1)
+	for _, name := range strings.Split(o.allowedCNs, ",") {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
+			names = append(names, trimmed)
+		}
+	}
+
+	return names
 }
 
 func main() {
@@ -127,6 +135,17 @@ func run(opts options) error {
 	return nil
 }
 
+func splitTrimmed(raw string) []string {
+	parts := make([]string, 0, strings.Count(raw, ",")+1)
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+
+	return parts
+}
+
 func startTracing(ctx context.Context, opts options) (*tracing.Provider, error) {
 	return tracing.New(ctx, tracing.Config{
 		ServiceName: "ironclaw-ingest",
@@ -148,7 +167,7 @@ func newBatchHandler(opts options, metrics domain.MetricsRecorder) (*httpingest.
 	}
 
 	producer, err := kafkabus.NewProducer(kafkabus.Config{
-		Brokers: strings.Split(opts.brokers, ","),
+		Brokers: splitTrimmed(opts.brokers),
 		Topic:   opts.topic,
 		Codec:   codec,
 		Metrics: metrics,
