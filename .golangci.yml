@@ -70,6 +70,10 @@ linters:
       - linters: [gosec]
         text: 'G304'
 
+      - linters: [gosec]
+        text: 'G302'
+        path: internal/spool/spool\.go
+
       - linters: [nilerr]
         path: internal/mcpserver/server.go
 

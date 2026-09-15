@@ -41,6 +41,7 @@ var (
 	ErrMissingUserID   = errors.New("domain: user id is empty")
 	ErrInvalidKind     = errors.New("domain: event kind is not recognised")
 	ErrNegativeLatency = errors.New("domain: latency must not be negative")
+	ErrNegativeBytes   = errors.New("domain: bytes must not be negative")
 	ErrZeroTimestamp   = errors.New("domain: observed timestamp is zero")
 	ErrDeviceMismatch  = errors.New("domain: event device id does not match authenticated identity")
 )
@@ -69,6 +70,9 @@ func (e Event) Validate() error {
 	}
 	if e.LatencyNanos < 0 {
 		return ErrNegativeLatency
+	}
+	if e.Bytes < 0 {
+		return ErrNegativeBytes
 	}
 	if e.ObservedAt.IsZero() {
 		return ErrZeroTimestamp

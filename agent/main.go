@@ -42,8 +42,8 @@ type options struct {
 	tailFraction    float64
 	minLatency      time.Duration
 	maxEventsPerCPU uint64
-	sampleModulus   uint
-	targetTGID      uint
+	sampleModulus   uint64
+	targetTGID      uint64
 	otlpEndpoint    string
 	sampleRatio     float64
 }
@@ -73,8 +73,8 @@ func main() {
 	flag.Float64Var(&opts.tailFraction, "tail-fraction", 0.05, "fraction of events drawn from the slow tail (synthetic capture only)")
 	flag.DurationVar(&opts.minLatency, "ebpf-min-latency", 0, "kernel-side syscall latency floor; events faster than this are filtered in the kernel")
 	flag.Uint64Var(&opts.maxEventsPerCPU, "ebpf-max-events-per-cpu", 0, "per-CPU event ceiling per second; zero is unlimited")
-	flag.UintVar(&opts.sampleModulus, "ebpf-sample-modulus", 1, "keep one in every N threads; 0 or 1 keeps every event")
-	flag.UintVar(&opts.targetTGID, "ebpf-target-tgid", 0, "capture only this thread group id; zero captures every process")
+	flag.Uint64Var(&opts.sampleModulus, "ebpf-sample-modulus", 1, "keep one in every N threads; 0 or 1 keeps every event")
+	flag.Uint64Var(&opts.targetTGID, "ebpf-target-tgid", 0, "capture only this thread group id; zero captures every process")
 	flag.StringVar(&opts.otlpEndpoint, "otlp", os.Getenv("IRONCLAW_OTLP"), "OTLP gRPC endpoint receiving traces; empty disables tracing")
 	flag.Float64Var(&opts.sampleRatio, "trace-sample", 0.01, "fraction of batches traced")
 	flag.Parse()
@@ -138,6 +138,15 @@ func run(opts options) error {
 
 	shipper := transport.NewTraced(shipperHTTPS, tracer)
 
+	sampleModulus, err := narrowUint32("sample modulus", opts.sampleModulus)
+	if err != nil {
+		return err
+	}
+	targetTGID, err := narrowUint32("target tgid", opts.targetTGID)
+	if err != nil {
+		return err
+	}
+
 	source, err := newCaptureSource(captureSettings{
 		mode:            opts.capture,
 		deviceID:        opts.deviceID,
@@ -148,8 +157,8 @@ func run(opts options) error {
 		tailFraction:    opts.tailFraction,
 		minLatency:      opts.minLatency,
 		maxEventsPerCPU: opts.maxEventsPerCPU,
-		sampleModulus:   opts.sampleModulus,
-		targetTGID:      opts.targetTGID,
+		sampleModulus:   sampleModulus,
+		targetTGID:      targetTGID,
 	})
 	if err != nil {
 		return err

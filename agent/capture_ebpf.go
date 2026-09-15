@@ -30,8 +30,8 @@ func newEBPFSource(settings captureSettings) (domain.EventSource, error) {
 	}, ebpf.Settings{
 		MinLatency:               settings.minLatency,
 		MaxEventsPerCPUPerSecond: settings.maxEventsPerCPU,
-		SampleModulus:            uint32(settings.sampleModulus),
-		TargetTGID:               uint32(settings.targetTGID),
+		SampleModulus:            settings.sampleModulus,
+		TargetTGID:               settings.targetTGID,
 	})
 }
 

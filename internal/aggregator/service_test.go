@@ -212,3 +212,86 @@ func TestHandleBatchRejectsCancelledContext(t *testing.T) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}
 }
+
+type rejectingPublisher struct {
+	rejectIdentity string
+	err            error
+	published      []domain.AggregateWindow
+}
+
+func (p *rejectingPublisher) PublishWindow(_ context.Context, window domain.AggregateWindow) error {
+	if window.Identity() == p.rejectIdentity {
+		return p.err
+	}
+	p.published = append(p.published, window)
+	return nil
+}
+
+func TestAPermanentlyFailingWindowDoesNotBlockTheOthers(t *testing.T) {
+	source := newSource(t)
+	if err := source.IngestBatch(batchOf(1, 2, 3)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	windows, err := source.CollectAll()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(windows) < 2 {
+		t.Fatalf("collected %d windows, want at least 2 for this test to mean anything", len(windows))
+	}
+
+	poison := errors.New("this window can never be published")
+	publisher := &rejectingPublisher{rejectIdentity: windows[0].Identity(), err: poison}
+	service, err := aggregator.New(source, publisher, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := service.EmitAll(context.Background()); !errors.Is(err, poison) {
+		t.Fatalf("got %v, want the failing window's error", err)
+	}
+
+	if len(publisher.published) != len(windows)-1 {
+		t.Fatalf("published %d of %d windows: one refused window must not stop the rest", len(publisher.published), len(windows))
+	}
+	for _, window := range publisher.published {
+		if window.Identity() == publisher.rejectIdentity {
+			t.Fatal("the refused window was committed despite failing")
+		}
+	}
+}
+
+func TestShedEventsAreCountedForObservability(t *testing.T) {
+	source, err := aggregate.New(aggregate.Config{
+		WindowSize:       windowSize,
+		RelativeAccuracy: 0.01,
+		MaxOpenWindows:   2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	metrics := store.NewMemory()
+	service, err := aggregator.New(source, &flakyPublisher{}, metrics)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := service.HandleBatch(context.Background(), batchOf(1, 2, 3, 4, 5)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	recorded, err := metrics.PipelineMetrics(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[aggregator.MetricEventsShed] == 0 {
+		t.Fatalf("shedding %d keys against a ceiling of 2 recorded no %s counter: the one path that drops telemetry to protect memory is invisible",
+			source.OpenWindows(), aggregator.MetricEventsShed)
+	}
+	if recorded[aggregator.MetricEventsShed] != source.Shed() {
+		t.Fatalf("counter is %d but the source reports %d shed events", recorded[aggregator.MetricEventsShed], source.Shed())
+	}
+}

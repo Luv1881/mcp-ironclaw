@@ -42,35 +42,25 @@ func TestUnknownCaptureSourceIsRefused(t *testing.T) {
 	}
 }
 
-func TestCaptureSettingsRejectValuesWiderThanTheKernelField(t *testing.T) {
-	if math.MaxUint32 == ^uint(0) {
-		t.Skip("uint is 32 bits wide on this platform, so the overflow cannot be expressed")
-	}
-
-	tests := map[string]func(*captureSettings){
-		"sample modulus": func(settings *captureSettings) { settings.sampleModulus = math.MaxUint32 + 1 },
-		"target tgid":    func(settings *captureSettings) { settings.targetTGID = math.MaxUint32 + 1 },
-	}
-
-	for name, corrupt := range tests {
+func TestKernelFieldValuesWiderThanAUint32AreRefused(t *testing.T) {
+	for name, value := range map[string]uint64{
+		"sample modulus": uint64(math.MaxUint32) + 1,
+		"target tgid":    uint64(math.MaxUint32) + 1,
+	} {
 		t.Run(name, func(t *testing.T) {
-			settings := validSettings()
-			corrupt(&settings)
-
-			if _, err := newCaptureSource(settings); !errors.Is(err, ErrCaptureSettingRange) {
+			if _, err := narrowUint32(name, value); !errors.Is(err, ErrCaptureSettingRange) {
 				t.Fatalf("got %v, want ErrCaptureSettingRange rather than a silent truncation", err)
 			}
 		})
 	}
 }
 
-func TestCaptureSettingsAtTheFieldWidthAreAccepted(t *testing.T) {
-	settings := validSettings()
-	settings.mode = captureEBPF
-	settings.sampleModulus = math.MaxUint32
-	settings.targetTGID = 0
-
-	if err := settings.validate(); err != nil {
+func TestKernelFieldValuesAtTheFieldWidthAreAccepted(t *testing.T) {
+	got, err := narrowUint32("sample modulus", uint64(math.MaxUint32))
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != math.MaxUint32 {
+		t.Fatalf("narrowed to %d, want %d", got, uint32(math.MaxUint32))
 	}
 }

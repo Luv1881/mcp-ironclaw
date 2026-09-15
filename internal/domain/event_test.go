@@ -111,3 +111,20 @@ func TestCorrelationKeyDistinguishesProcesses(t *testing.T) {
 		t.Fatal("expected distinct correlation keys for distinct process ids")
 	}
 }
+
+func TestNegativeBytesAreRejected(t *testing.T) {
+	event := domain.Event{
+		DeviceID:     "device-1",
+		UserID:       "user-1",
+		ProcessID:    1,
+		PodID:        "pod-a",
+		Kind:         domain.EventKindNetwork,
+		ObservedAt:   time.Unix(1700000000, 0).UTC(),
+		LatencyNanos: 1000,
+		Bytes:        -1,
+	}
+
+	if err := event.Validate(); !errors.Is(err, domain.ErrNegativeBytes) {
+		t.Fatalf("got %v, want ErrNegativeBytes: a negative byte count silently drains the per-key byte counter", err)
+	}
+}

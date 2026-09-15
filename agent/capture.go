@@ -30,25 +30,18 @@ type captureSettings struct {
 	tailFraction    float64
 	minLatency      time.Duration
 	maxEventsPerCPU uint64
-	sampleModulus   uint
-	targetTGID      uint
+	sampleModulus   uint32
+	targetTGID      uint32
 }
 
-func (s captureSettings) validate() error {
-	if s.sampleModulus > math.MaxUint32 {
-		return fmt.Errorf("%w: sample modulus %d exceeds %d", ErrCaptureSettingRange, s.sampleModulus, uint64(math.MaxUint32))
+func narrowUint32(name string, value uint64) (uint32, error) {
+	if value > math.MaxUint32 {
+		return 0, fmt.Errorf("%w: %s %d exceeds %d", ErrCaptureSettingRange, name, value, uint64(math.MaxUint32))
 	}
-	if s.targetTGID > math.MaxUint32 {
-		return fmt.Errorf("%w: target tgid %d exceeds %d", ErrCaptureSettingRange, s.targetTGID, uint64(math.MaxUint32))
-	}
-	return nil
+	return uint32(value), nil
 }
 
 func newCaptureSource(settings captureSettings) (domain.EventSource, error) {
-	if err := settings.validate(); err != nil {
-		return nil, err
-	}
-
 	switch settings.mode {
 	case captureSynthetic:
 		return newSyntheticSource(settings)

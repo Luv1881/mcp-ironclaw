@@ -279,3 +279,36 @@ func TestQuantileReflectsBucketsIntroducedByMerge(t *testing.T) {
 		t.Fatalf("merged p50 is %d but the same samples added directly give %d; Merge did not invalidate the cached bucket ordering", got, want)
 	}
 }
+
+func TestQuantileOfTheLargestLatencyStaysRepresentable(t *testing.T) {
+	sketch, err := aggregate.NewSketch(0.01)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	sketch.Add(math.MaxInt64)
+
+	for _, q := range []float64{0.5, 0.95, 0.99, 1} {
+		got, err := sketch.Quantile(q)
+		if err != nil {
+			t.Fatalf("unexpected error at q=%v: %v", q, err)
+		}
+		if got <= 0 {
+			t.Fatalf("q=%v of the largest representable latency is %d, want a positive value: a device reporting %d must not publish a negative percentile", q, got, int64(math.MaxInt64))
+		}
+	}
+}
+
+func TestQuantileRejectsNaN(t *testing.T) {
+	sketch, err := aggregate.NewSketch(0.01)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sketch.Add(1)
+
+	for _, q := range []float64{math.NaN(), math.Inf(-1), math.Inf(1), -0.1, 1.1} {
+		if _, err := sketch.Quantile(q); !errors.Is(err, aggregate.ErrInvalidQuantile) {
+			t.Fatalf("q=%v gave %v, want ErrInvalidQuantile rather than a silent zero", q, err)
+		}
+	}
+}

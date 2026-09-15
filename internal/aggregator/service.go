@@ -3,6 +3,7 @@ package aggregator
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/ironclaw/mcp-ironclaw/internal/domain"
@@ -17,6 +18,7 @@ const (
 	MetricBatchesConsumed = "aggregator_batches_consumed"
 	MetricWindowsEmitted  = "aggregator_windows_emitted"
 	MetricWindowsRetained = "aggregator_windows_retained"
+	MetricEventsShed      = "aggregator_events_shed"
 )
 
 type WindowSource interface {
@@ -26,10 +28,17 @@ type WindowSource interface {
 	Commit(windows []domain.AggregateWindow)
 }
 
+type shedReporter interface {
+	Shed() int64
+}
+
 type Service struct {
 	source    WindowSource
 	publisher domain.WindowPublisher
 	metrics   domain.MetricsRecorder
+
+	shedMu   sync.Mutex
+	lastShed int64
 }
 
 func New(source WindowSource, publisher domain.WindowPublisher, metrics domain.MetricsRecorder) (*Service, error) {
@@ -50,7 +59,23 @@ func (s *Service) HandleBatch(ctx context.Context, batch domain.Batch) error {
 		return err
 	}
 	s.record(MetricBatchesConsumed, 1)
+	s.recordShed()
 	return nil
+}
+
+func (s *Service) recordShed() {
+	reporter, ok := s.source.(shedReporter)
+	if !ok {
+		return
+	}
+
+	s.shedMu.Lock()
+	shed := reporter.Shed()
+	delta := shed - s.lastShed
+	s.lastShed = shed
+	s.shedMu.Unlock()
+
+	s.record(MetricEventsShed, delta)
 }
 
 func (s *Service) EmitClosedWindows(ctx context.Context, watermark time.Time) error {
@@ -75,8 +100,10 @@ func (s *Service) publish(ctx context.Context, windows []domain.AggregateWindow)
 	var failure error
 	for _, window := range windows {
 		if err := s.publisher.PublishWindow(ctx, window); err != nil {
-			failure = err
-			break
+			if failure == nil {
+				failure = err
+			}
+			continue
 		}
 		published = append(published, window)
 	}

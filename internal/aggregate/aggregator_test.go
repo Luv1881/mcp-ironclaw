@@ -230,3 +230,15 @@ func TestAggregatorIngestBatch(t *testing.T) {
 		t.Fatalf("count %d errors %d, want 2 and 1", windows[0].Count, windows[0].ErrorCount)
 	}
 }
+
+func TestANegativeKeyCeilingIsRefusedRatherThanMeaningsUnlimited(t *testing.T) {
+	_, err := aggregate.New(aggregate.Config{
+		WindowSize:       10 * time.Second,
+		RelativeAccuracy: 0.01,
+		MaxOpenWindows:   -1,
+	})
+
+	if !errors.Is(err, aggregate.ErrInvalidKeyCeiling) {
+		t.Fatalf("got %v, want ErrInvalidKeyCeiling: a negative ceiling would silently disable the guard that keeps the key space bounded", err)
+	}
+}

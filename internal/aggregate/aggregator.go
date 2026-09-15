@@ -11,6 +11,7 @@ import (
 
 var (
 	ErrInvalidWindowSize = errors.New("aggregate: window size must be positive")
+	ErrInvalidKeyCeiling = errors.New("aggregate: the open-window ceiling must not be negative")
 	ErrTooManyKeys       = errors.New("aggregate: correlation key ceiling reached, event shed")
 )
 
@@ -38,12 +39,20 @@ func (c Config) validate() error {
 	if c.RelativeAccuracy < 0 || c.RelativeAccuracy >= 1 {
 		return ErrInvalidAccuracy
 	}
+	if c.MaxOpenWindows < 0 {
+		return ErrInvalidKeyCeiling
+	}
 	return nil
 }
 
 type windowKey struct {
 	correlation domain.CorrelationKey
 	windowID    int64
+}
+
+type emission struct {
+	identity string
+	window   domain.AggregateWindow
 }
 
 type windowState struct {
@@ -224,10 +233,15 @@ func (a *Aggregator) collect(include func(windowKey) bool) ([]domain.AggregateWi
 	sort.Slice(selected, func(i, j int) bool { return selected[i].before(selected[j]) })
 
 	windows := make([]domain.AggregateWindow, 0, len(selected)+len(a.pending))
+
+	pending := make([]emission, 0, len(a.pending))
 	for _, window := range a.pending {
-		windows = append(windows, window)
+		pending = append(pending, emission{identity: window.Identity(), window: window})
 	}
-	sort.Slice(windows, func(i, j int) bool { return windows[i].Identity() < windows[j].Identity() })
+	sort.Slice(pending, func(i, j int) bool { return pending[i].identity < pending[j].identity })
+	for _, item := range pending {
+		windows = append(windows, item.window)
+	}
 
 	for _, key := range selected {
 		state := a.open[key]

@@ -23,7 +23,6 @@ type Sketch struct {
 	sortedStale      bool
 	zeroCount        int64
 	count            int64
-	sum              int64
 	max              int64
 	min              int64
 }
@@ -47,8 +46,6 @@ func (s *Sketch) RelativeAccuracy() float64 { return s.relativeAccuracy }
 
 func (s *Sketch) Count() int64 { return s.count }
 
-func (s *Sketch) Sum() int64 { return s.sum }
-
 func (s *Sketch) Max() int64 {
 	if s.count == 0 {
 		return 0
@@ -65,7 +62,6 @@ func (s *Sketch) Min() int64 {
 
 func (s *Sketch) Add(value int64) {
 	s.count++
-	s.sum += value
 	if value > s.max {
 		s.max = value
 	}
@@ -107,8 +103,12 @@ func (s *Sketch) index(value int64) int {
 }
 
 func (s *Sketch) value(index int) int64 {
-	estimate := 2 * math.Pow(s.gamma, float64(index)) / (1 + s.gamma)
-	return int64(math.Round(estimate))
+	estimate := math.Round(2 * math.Pow(s.gamma, float64(index)) / (1 + s.gamma))
+	if estimate >= math.MaxInt64 {
+		return math.MaxInt64
+	}
+
+	return int64(estimate)
 }
 
 func (s *Sketch) Merge(other *Sketch) error {
@@ -130,7 +130,6 @@ func (s *Sketch) Merge(other *Sketch) error {
 	}
 	s.zeroCount += other.zeroCount
 	s.count += other.count
-	s.sum += other.sum
 	if other.max > s.max {
 		s.max = other.max
 	}
@@ -141,7 +140,7 @@ func (s *Sketch) Merge(other *Sketch) error {
 }
 
 func (s *Sketch) Quantile(q float64) (int64, error) {
-	if q < 0 || q > 1 {
+	if math.IsNaN(q) || q < 0 || q > 1 {
 		return 0, ErrInvalidQuantile
 	}
 	if s.count == 0 {
@@ -172,7 +171,6 @@ func (s *Sketch) Clone() *Sketch {
 		buckets:          make(map[int]int64, len(s.buckets)),
 		zeroCount:        s.zeroCount,
 		count:            s.count,
-		sum:              s.sum,
 		max:              s.max,
 		min:              s.min,
 	}

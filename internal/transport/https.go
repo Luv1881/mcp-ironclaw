@@ -47,11 +47,12 @@ type HTTPSConfig struct {
 }
 
 const (
-	MetricSent         = "agent_batches_sent"
-	MetricSpooled      = "agent_batches_spooled"
-	MetricDrained      = "agent_batches_drained"
-	MetricSpoolDropped = "agent_spool_dropped"
-	MetricRefused      = "agent_batches_refused"
+	MetricSent          = "agent_batches_sent"
+	MetricSpooled       = "agent_batches_spooled"
+	MetricDrained       = "agent_batches_drained"
+	MetricSpoolDropped  = "agent_spool_dropped"
+	MetricRefused       = "agent_batches_refused"
+	MetricReleaseFailed = "agent_spool_release_failed"
 )
 
 type HTTPS struct {
@@ -237,7 +238,7 @@ func (h *HTTPS) Drain(ctx context.Context) {
 
 		if err := h.post(ctx, payload); err != nil {
 			if errors.Is(err, ErrUnacceptable) {
-				h.queue.Release(name)
+				h.release(name)
 				h.record(MetricRefused, 1)
 				failures = 0
 				continue
@@ -249,9 +250,15 @@ func (h *HTTPS) Drain(ctx context.Context) {
 			continue
 		}
 
-		h.queue.Release(name)
+		h.release(name)
 		h.record(MetricDrained, 1)
 		failures = 0
+	}
+}
+
+func (h *HTTPS) release(name string) {
+	if err := h.queue.Release(name); err != nil {
+		h.record(MetricReleaseFailed, 1)
 	}
 }
 
