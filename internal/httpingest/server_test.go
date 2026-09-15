@@ -14,6 +14,7 @@ import (
 	"github.com/ironclaw/mcp-ironclaw/internal/domain"
 	"github.com/ironclaw/mcp-ironclaw/internal/httpingest"
 	"github.com/ironclaw/mcp-ironclaw/internal/store"
+	"github.com/ironclaw/mcp-ironclaw/internal/wire"
 )
 
 type recordingAcceptor struct {
@@ -296,5 +297,69 @@ func TestPodIdentityFallsBackToTheEnvironment(t *testing.T) {
 	}
 	if got := acceptor.batches[0].Events[0].PodID; got != "ingest-from-env" {
 		t.Fatalf("pod id %q, want ingest-from-env", got)
+	}
+}
+
+func TestAnAgentEncodedBatchSurvivesTheRealIngestPath(t *testing.T) {
+	acceptor := &recordingAcceptor{}
+	server, err := httpingest.New(httpingest.Config{
+		Acceptor: acceptor,
+		PodID:    "ingest-7c9f-abcde",
+		Clock:    fixedClock{at: fixedNow()},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	observed := time.Unix(1700000000, 500).UTC()
+	encoded, err := wire.EncodeEdgeBatch(domain.Batch{
+		DeviceID:  "device-000",
+		CreatedAt: observed,
+		Events: []domain.Event{
+			{
+				DeviceID: "device-000", UserID: "user-000", ProcessID: 4242,
+				PodID: "agent-claimed-pod", Kind: domain.EventKindNetwork,
+				ObservedAt: observed, LatencyNanos: 2_500_000, Bytes: 128, Failed: true,
+			},
+			{
+				DeviceID: "device-000", UserID: "user-000", ProcessID: 4243,
+				PodID: "agent-claimed-pod", Kind: domain.EventKindSyscall,
+				ObservedAt: observed, LatencyNanos: 1_000_000, Bytes: 64, Failed: false,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	recorder := post(server.Handler(), "device-000", string(encoded))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status %d, want 202: %s", recorder.Code, recorder.Body.String())
+	}
+
+	if len(acceptor.batches) != 1 {
+		t.Fatalf("accepted %d batches, want 1", len(acceptor.batches))
+	}
+
+	batch := acceptor.batches[0]
+	if batch.DeviceID != "device-000" {
+		t.Fatalf("device %q, want the authenticated identity", batch.DeviceID)
+	}
+	if len(batch.Events) != 2 {
+		t.Fatalf("batch holds %d events, want 2", len(batch.Events))
+	}
+
+	first := batch.Events[0]
+	if first.UserID != "user-000" || first.ProcessID != 4242 || first.Kind != domain.EventKindNetwork {
+		t.Fatalf("event identity or kind changed across the edge: %+v", first)
+	}
+	if first.LatencyNanos != 2_500_000 || first.Bytes != 128 || !first.Failed {
+		t.Fatalf("event measurements changed across the edge: %+v", first)
+	}
+	if !first.ObservedAt.Equal(observed) {
+		t.Fatalf("observed at %s, want %s", first.ObservedAt, observed)
+	}
+	if first.PodID != "ingest-7c9f-abcde" {
+		t.Fatalf("pod %q, want the ingest's own identity rather than the agent's claim", first.PodID)
 	}
 }

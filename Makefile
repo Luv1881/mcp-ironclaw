@@ -14,7 +14,7 @@ PKI_DIR ?= deploy/pki/out
         infra-up infra-down infra-logs integration pki pki-force haproxy-check mtls-test \
         edge-image edge-up edge-down edge-test keystore loadtest \
         images k8s-validate k8s-up k8s-down k8s-status tf-validate ironclaw-verify \
-        freshness chaos-up chaos-down chaos-broker-kill lint agent
+        freshness chaos-up chaos-down chaos-broker-kill agent agent-ebpf vuln
 
 all: fmt-check vet lint test
 
@@ -23,6 +23,12 @@ lint: $(BPF_OBJECT)
 
 agent:
 	$(GO) build -o bin/ironclaw-agent ./agent
+
+agent-ebpf: bpf
+	$(GO) build -tags ebpf -o bin/ironclaw-agent-ebpf ./agent
+
+vuln:
+	govulncheck ./...
 
 build:
 	$(GO) build ./...

@@ -143,6 +143,9 @@ func run(opts options) error {
 		Addr:              opts.addr,
 		Handler:           traced(handler.Handler(), tracer),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 
 	if opts.certFile != "" {
@@ -162,7 +165,14 @@ func run(opts options) error {
 		})
 		mux.Handle("GET /metrics", ironmetrics.Handler(registry))
 
-		health = &http.Server{Addr: opts.healthAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		health = &http.Server{
+			Addr:              opts.healthAddr,
+			Handler:           mux,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			IdleTimeout:       2 * time.Minute,
+		}
 
 		go func() {
 			if err := health.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

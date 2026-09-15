@@ -20,27 +20,32 @@ import (
 )
 
 type options struct {
-	endpoint     string
-	serverName   string
-	certFile     string
-	keyFile      string
-	caFile       string
-	deviceID     string
-	userID       string
-	podID        string
-	spoolDir     string
-	spoolBytes   int64
-	events       int
-	interval     time.Duration
-	batchSize    int
-	batchWindow  time.Duration
-	reportEvery  time.Duration
-	baseBackoff  time.Duration
-	maxBackoff   time.Duration
-	queueDepth   int
-	tailFraction float64
-	otlpEndpoint string
-	sampleRatio  float64
+	endpoint        string
+	serverName      string
+	certFile        string
+	keyFile         string
+	caFile          string
+	deviceID        string
+	userID          string
+	podID           string
+	spoolDir        string
+	spoolBytes      int64
+	capture         string
+	events          int
+	interval        time.Duration
+	batchSize       int
+	batchWindow     time.Duration
+	reportEvery     time.Duration
+	baseBackoff     time.Duration
+	maxBackoff      time.Duration
+	queueDepth      int
+	tailFraction    float64
+	minLatency      time.Duration
+	maxEventsPerCPU uint64
+	sampleModulus   uint
+	targetTGID      uint
+	otlpEndpoint    string
+	sampleRatio     float64
 }
 
 func main() {
@@ -56,7 +61,8 @@ func main() {
 	flag.StringVar(&opts.podID, "pod", "on-prem", "pod or host label attached to events")
 	flag.StringVar(&opts.spoolDir, "spool", "", "directory holding batches during an outage; empty disables spooling")
 	flag.Int64Var(&opts.spoolBytes, "spool-bytes", 64<<20, "maximum bytes the spool may occupy before dropping the oldest batches")
-	flag.IntVar(&opts.events, "events", 100000, "events to produce before exiting")
+	flag.StringVar(&opts.capture, "capture", captureSynthetic, "telemetry source: synthetic or ebpf (ebpf requires a binary built with -tags ebpf and CAP_BPF)")
+	flag.IntVar(&opts.events, "events", 100000, "events to produce before exiting (synthetic capture only)")
 	flag.DurationVar(&opts.interval, "interval", time.Millisecond, "delay between events")
 	flag.IntVar(&opts.batchSize, "batch-size", 500, "events per batch")
 	flag.DurationVar(&opts.batchWindow, "batch-window", 200*time.Millisecond, "flush a partial batch after this long")
@@ -64,7 +70,11 @@ func main() {
 	flag.DurationVar(&opts.reportEvery, "report-every", 30*time.Second, "how often to log agent statistics")
 	flag.DurationVar(&opts.baseBackoff, "base-backoff", 250*time.Millisecond, "initial retry delay when the edge is unreachable")
 	flag.DurationVar(&opts.maxBackoff, "max-backoff", 30*time.Second, "ceiling on the retry delay")
-	flag.Float64Var(&opts.tailFraction, "tail-fraction", 0.05, "fraction of events drawn from the slow tail")
+	flag.Float64Var(&opts.tailFraction, "tail-fraction", 0.05, "fraction of events drawn from the slow tail (synthetic capture only)")
+	flag.DurationVar(&opts.minLatency, "ebpf-min-latency", 0, "kernel-side syscall latency floor; events faster than this are filtered in the kernel")
+	flag.Uint64Var(&opts.maxEventsPerCPU, "ebpf-max-events-per-cpu", 0, "per-CPU event ceiling per second; zero is unlimited")
+	flag.UintVar(&opts.sampleModulus, "ebpf-sample-modulus", 1, "keep one in every N threads; 0 or 1 keeps every event")
+	flag.UintVar(&opts.targetTGID, "ebpf-target-tgid", 0, "capture only this thread group id; zero captures every process")
 	flag.StringVar(&opts.otlpEndpoint, "otlp", os.Getenv("IRONCLAW_OTLP"), "OTLP gRPC endpoint receiving traces; empty disables tracing")
 	flag.Float64Var(&opts.sampleRatio, "trace-sample", 0.01, "fraction of batches traced")
 	flag.Parse()
@@ -128,23 +138,23 @@ func run(opts options) error {
 
 	shipper := transport.NewTraced(shipperHTTPS, tracer)
 
-	source, err := pipeline.NewSyntheticSource(pipeline.SyntheticConfig{
-		DeviceID:     opts.deviceID,
-		UserID:       opts.userID,
-		PodID:        opts.podID,
-		ProcessIDs:   []int32{101, 102, 103, 104},
-		EventCount:   opts.events,
-		Interval:     opts.interval,
-		ErrorRate:    0.05,
-		BaseLatency:  time.Millisecond,
-		TailLatency:  40 * time.Millisecond,
-		TailFraction: opts.tailFraction,
-		Seed:         time.Now().UnixNano(),
+	source, err := newCaptureSource(captureSettings{
+		mode:            opts.capture,
+		deviceID:        opts.deviceID,
+		userID:          opts.userID,
+		podID:           opts.podID,
+		events:          opts.events,
+		interval:        opts.interval,
+		tailFraction:    opts.tailFraction,
+		minLatency:      opts.minLatency,
+		maxEventsPerCPU: opts.maxEventsPerCPU,
+		sampleModulus:   opts.sampleModulus,
+		targetTGID:      opts.targetTGID,
 	})
 	if err != nil {
 		return err
 	}
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 
 	batcher, err := pipeline.NewBatcher(pipeline.BatcherConfig{
 		DeviceID:    opts.deviceID,
@@ -162,7 +172,7 @@ func run(opts options) error {
 	}
 	go report(ctx, opts.reportEvery, batcher, queue)
 
-	log.Printf("agent %s streaming to %s (spool=%v)", opts.deviceID, opts.endpoint, queue != nil)
+	log.Printf("agent %s capturing %s and streaming to %s (spool=%v)", opts.deviceID, opts.capture, opts.endpoint, queue != nil)
 
 	if err := batcher.Run(ctx, source, shipper); err != nil && ctx.Err() == nil {
 		return err

@@ -35,7 +35,9 @@ jobs:
           fi
 
       - name: Build
-        run: go build ./...
+        run: |
+          go build ./...
+          go build -o /dev/null ./agent
 
       - name: Vet
         run: go vet ./...
@@ -60,9 +62,43 @@ jobs:
           sudo apt-get install -y -qq clang llvm libbpf-dev
           make bpf
 
+      - name: Build with the eBPF build tag
+        run: go build -tags ebpf ./...
+
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+
+  vulnerability:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Scan
+        run: govulncheck ./...
+
+  contract:
+    name: MCP contract against the IronClaw host's expectations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run the contract suite
+        run: make ironclaw-verify
 
   integration:
     name: Adapter tests against real infrastructure

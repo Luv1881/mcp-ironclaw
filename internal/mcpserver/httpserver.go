@@ -31,11 +31,22 @@ type HTTPOptions struct {
 	KeyFile         string
 	ClientCAFile    string
 	ResourceMetaURL string
+	MaxBodyBytes    int64
 }
+
+const (
+	DefaultMaxBodyBytes = 4 << 20
+	DefaultIdleTimeout  = 2 * time.Minute
+)
 
 func NewHTTPServer(options HTTPOptions) (*http.Server, error) {
 	if options.RequireAuth && options.Verifier == nil {
 		return nil, ErrNoVerifier
+	}
+
+	maxBody := options.MaxBodyBytes
+	if maxBody <= 0 {
+		maxBody = DefaultMaxBodyBytes
 	}
 
 	handler := mcp.NewStreamableHTTPHandler(
@@ -55,12 +66,13 @@ func NewHTTPServer(options HTTPOptions) (*http.Server, error) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.Handle("/mcp", wrapped)
+	mux.Handle("/mcp", http.MaxBytesHandler(wrapped, maxBody))
 
 	server := &http.Server{
 		Addr:              options.Addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       DefaultIdleTimeout,
 	}
 
 	if options.CertFile != "" {

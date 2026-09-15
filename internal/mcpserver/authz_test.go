@@ -3,6 +3,9 @@ package mcpserver_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,5 +187,46 @@ func TestParseStaticTokensKeepsColonsInsideScopes(t *testing.T) {
 	}
 	if len(entry.Scopes) != 2 || entry.Scopes[0] != mcpserver.ScopeAdmin {
 		t.Fatalf("scopes %v, want the admin scope intact despite its colon", entry.Scopes)
+	}
+}
+
+func mcpPOST(t *testing.T, body string, maxBytes int64) int {
+	t.Helper()
+
+	server, err := mcpserver.NewHTTPServer(mcpserver.HTTPOptions{
+		Addr:         ":0",
+		Tools:        authenticatedTools(t),
+		MaxBodyBytes: maxBytes,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+
+	recorder := httptest.NewRecorder()
+	server.Handler.ServeHTTP(recorder, request)
+
+	return recorder.Code
+}
+
+func TestHTTPTransportRefusesABodyBeyondItsCeiling(t *testing.T) {
+	const ceiling = 1024
+
+	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`
+	padded := initialize + strings.Repeat(" ", 4096)
+
+	if code := mcpPOST(t, initialize, 0); code != http.StatusOK {
+		t.Fatalf("status %d for a valid request, want 200: the control is not a request this transport serves", code)
+	}
+
+	if code := mcpPOST(t, padded, 0); code != http.StatusOK {
+		t.Fatalf("status %d for a padded request under the default ceiling, want 200: trailing whitespace is valid JSON, so only the ceiling may refuse it", code)
+	}
+
+	if code := mcpPOST(t, padded, ceiling); code == http.StatusOK {
+		t.Fatalf("status %d, want a refusal: the transport read %d bytes past a %d-byte ceiling", code, len(padded), ceiling)
 	}
 }

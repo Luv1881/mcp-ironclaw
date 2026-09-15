@@ -17,10 +17,13 @@ func newFanOutWindows(targets ...domain.WindowPublisher) *fanOutWindows {
 }
 
 func (f *fanOutWindows) PublishWindow(ctx context.Context, window domain.AggregateWindow) error {
+	var firstErr error
+
 	for _, target := range f.targets {
-		if err := target.PublishWindow(ctx, window); err != nil {
-			return err
+		if err := target.PublishWindow(ctx, window); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
-	return nil
+
+	return firstErr
 }

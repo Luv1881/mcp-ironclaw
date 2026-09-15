@@ -48,12 +48,3 @@ func EncodeEdgeBatch(batch domain.Batch) ([]byte, error) {
 
 	return encoded, nil
 }
-
-func DecodeEdgeBatch(raw []byte) (EdgeBatch, error) {
-	var payload EdgeBatch
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return EdgeBatch{}, fmt.Errorf("wire: decoding edge batch: %w", err)
-	}
-
-	return payload, nil
-}
