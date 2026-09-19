@@ -167,7 +167,7 @@ func TestPipelineDeliversEveryEventToReadableState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(devices) != 1 || devices[0] != deviceID {
+	if len(devices.Devices) != 1 || devices.Devices[0] != deviceID {
 		t.Fatalf("user devices %v, want [%s]", devices, deviceID)
 	}
 }

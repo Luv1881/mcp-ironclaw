@@ -27,7 +27,11 @@ Error budget follows directly: 99.95% monthly allows roughly 21 minutes of faile
 
 ## Failure Modes and Degradation
 
-**Redis unavailable.** The MCP read path fails over to Postgres and sets `stale: true` on every `DeviceState` response, so callers can tell a degraded read from a fresh one. Writes are unaffected: the Redis writer is an independent consumer group and simply lags, then catches up from its committed offset.
+**Redis unavailable.** The MCP read path fails over to Postgres and sets `stale: true` on every `DeviceState` and device-list response, so callers can tell a degraded read from a fresh one. Writes are unaffected: the Redis writer is an independent consumer group and simply lags, then catches up from its committed offset.
+
+This is measured, not assumed — the flag was previously plumbed end to end but never set by any code path, so the read path failed outright during a Redis outage while this document claimed otherwise. Stopping Redis against the live stack now yields `stale: true` with the counters served from the archive, and restarting it clears the flag.
+
+The fallback deliberately does **not** fire for a device the hot path reports as unknown: a miss is a miss, and probing the archive on every miss would turn the fast path into a database query. Only an infrastructure failure falls back. `get_pipeline_metrics` and `watch_device` remain unavailable during a Redis outage, since both read the hot path directly and neither has an archive equivalent.
 
 **Kafka degraded or unreachable.** Ingest returns 503 and the edge sheds load. Agents spool batches to a size-capped local disk queue and replay when the path recovers. Nothing is acknowledged that was not durably written, so an agent never believes a dropped batch succeeded.
 

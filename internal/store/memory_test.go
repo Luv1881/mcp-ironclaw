@@ -135,7 +135,7 @@ func TestUserDevicesIsScopedAndSorted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(devices) != 2 || devices[0] != "device-a" || devices[1] != "device-b" {
+	if len(devices.Devices) != 2 || devices.Devices[0] != "device-a" || devices.Devices[1] != "device-b" {
 		t.Fatalf("user-1 devices %v, want sorted [device-a device-b]", devices)
 	}
 
@@ -143,7 +143,7 @@ func TestUserDevicesIsScopedAndSorted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(others) != 1 || others[0] != "device-z" {
+	if len(others.Devices) != 1 || others.Devices[0] != "device-z" {
 		t.Fatalf("user-2 devices %v, want [device-z]", others)
 	}
 
@@ -151,7 +151,7 @@ func TestUserDevicesIsScopedAndSorted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(empty) != 0 {
+	if len(empty.Devices) != 0 {
 		t.Fatalf("unknown user returned %v, want empty", empty)
 	}
 }
@@ -269,7 +269,7 @@ func TestResetDeviceClearsCountersButKeepsRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(devices) != 1 {
+	if len(devices.Devices) != 1 {
 		t.Fatalf("device disappeared from the user index after reset: %v", devices)
 	}
 }

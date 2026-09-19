@@ -127,8 +127,8 @@ func TestDeviceStateSurfacesUnknownDevice(t *testing.T) {
 		UserID:   "user-1",
 		DeviceID: "absent",
 	})
-	if !errors.Is(err, store.ErrDeviceNotFound) {
-		t.Fatalf("got %v, want ErrDeviceNotFound", err)
+	if !errors.Is(err, domain.ErrDeviceNotFound) {
+		t.Fatalf("got %v, want domain.ErrDeviceNotFound", err)
 	}
 }
 
@@ -139,7 +139,7 @@ func TestDeviceStateIsScopedToTheRequestingUser(t *testing.T) {
 		UserID:   "user-2",
 		DeviceID: "device-1",
 	})
-	if !errors.Is(err, store.ErrDeviceNotFound) {
+	if !errors.Is(err, domain.ErrDeviceNotFound) {
 		t.Fatalf("another user could read device-1: %v", err)
 	}
 }

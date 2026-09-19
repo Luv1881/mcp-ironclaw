@@ -32,11 +32,13 @@ type HTTPOptions struct {
 	ClientCAFile    string
 	ResourceMetaURL string
 	MaxBodyBytes    int64
+	SessionTTL      time.Duration
 }
 
 const (
 	DefaultMaxBodyBytes = 4 << 20
 	DefaultIdleTimeout  = 2 * time.Minute
+	DefaultSessionTTL   = 30 * time.Minute
 )
 
 func NewHTTPServer(options HTTPOptions) (*http.Server, error) {
@@ -49,9 +51,14 @@ func NewHTTPServer(options HTTPOptions) (*http.Server, error) {
 		maxBody = DefaultMaxBodyBytes
 	}
 
+	sessionTTL := options.SessionTTL
+	if sessionTTL <= 0 {
+		sessionTTL = DefaultSessionTTL
+	}
+
 	handler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return NewServer(options.Tools) },
-		nil,
+		&mcp.StreamableHTTPOptions{SessionTimeout: sessionTTL},
 	)
 
 	wrapped := withPrincipal(handler)
@@ -66,7 +73,7 @@ func NewHTTPServer(options HTTPOptions) (*http.Server, error) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.Handle("/mcp", http.MaxBytesHandler(wrapped, maxBody))
+	mux.Handle("/mcp", http.NewCrossOriginProtection().Handler(http.MaxBytesHandler(wrapped, maxBody)))
 
 	server := &http.Server{
 		Addr:              options.Addr,

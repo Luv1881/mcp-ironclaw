@@ -65,7 +65,7 @@ The binary logs which backend it started with. Every adapter satisfies the same 
 | Tool | Description |
 | --- | --- |
 | `get_device_state(user_id, device_id)` | Counters and p95/p99 latency for one device |
-| `get_user_devices(user_id)` | Every device tracked for a user |
+| `get_user_devices(user_id, limit)` | Devices tracked for a user, capped and reporting `truncated` |
 | `get_pipeline_metrics()` | Pipeline observability counters (admin scope) |
 | `watch_device(user_id, device_id, timeout_seconds)` | Long-polls until the device's state changes |
 | `reset_device_counters(user_id, device_id, actor)` | Publishes a command event; never writes state inline |
@@ -79,6 +79,8 @@ Serve over stdio (default) or streamable HTTP with mTLS and bearer tokens:
 ```
 
 Every user-scoped tool authorises the caller against the requested tenant. A principal without `ironclaw:admin` cannot read another user's devices, and fleet metrics are admin-only.
+
+The catalogue declares what each tool does: the four readers carry `readOnlyHint`, and `reset_device_counters` declares `destructiveHint` and is not marked read-only, so a host can prompt differently for the one tool that changes state. The transport refuses cross-origin requests, closes idle sessions (`-mcp-session-ttl`), and caps concurrent watches (`-max-watches`), because each watch holds a subscription for up to five minutes.
 
 ## Design
 
@@ -103,7 +105,7 @@ Three properties are load-bearing and worth knowing before changing anything:
 
 **Emissions are deduplicated, not windows.** `AggregateWindow.Sequence` is a monotonic counter assigned at collect time. `Identity()` is `key#window#sequence` and `WindowIdentity()` is `key#window`. Late events for an already-closed window are emitted as a second delta with a new sequence, so they accumulate — while a genuine Kafka redelivery of the same emission is still absorbed. Collapsing these two identities silently dropped 6.3% of events under load.
 
-**Redis and Postgres are independent.** Both consume `events.aggregated` in separate consumer groups. Neither depends on the other, and the Redis rebuild path is a Kafka replay, not a database scan.
+**Redis and Postgres are independent.** Both consume `events.aggregated` in separate consumer groups. Neither depends on the other, and the Redis rebuild path is a Kafka replay, not a database scan. When Redis is unavailable the read path serves device state and device lists from the archive with `stale: true` rather than failing; a device the hot path reports as unknown is *not* probed in the archive, so the fast path stays fast.
 
 **Freshness has a floor at the window size.** With closed-window emission an event cannot appear in Redis until its window closes, so a 10 s window measures p99 10.0 s. `-emit-open-windows` publishes the in-flight window as a delta each tick, which drops the same configuration to p99 1.017 s at the cost of one extra emission per active key per tick.
 
@@ -151,6 +153,7 @@ CI runs the race suite, lint with the `ebpf` build tag, the adapter suites again
 | service → Redis | TLS + AUTH |
 | service → Postgres | TLS, `sslmode=verify-full` |
 | MCP client → server | mTLS + bearer token, per-tenant authorisation |
+| MCP transport | Cross-origin requests refused, idle sessions expire, request bodies and concurrent watches bounded |
 
 Each transport option refuses insecure combinations at startup rather than warning — credentials without TLS is a startup error.
 
@@ -181,6 +184,7 @@ The pipeline, adapters, edge, Kubernetes manifests and load path have all been e
 Known gaps, stated plainly:
 
 - eBPF programs compile and their decoder is tested, but **attaching requires `CAP_BPF`** and has not been executed in the development environment. The agent selects its source with `-capture`: `synthetic` is the default and needs no privileges; `ebpf` loads the kernel programs through the same `EventSource` port. Both are built and tested — `make agent` and `make agent-ebpf` — and the eBPF path has been driven far enough to prove it reaches the loader, failing on the kernel memlock limit exactly as an unprivileged host must. The kernel/userspace record contract is *derived* rather than asserted: a test parses `struct event` out of the C source, computes its C layout with alignment and padding, and checks the decoder's size and every field offset against it. That test was written after it caught a real 40-vs-48 byte mismatch which would have rejected every kernel record on first attach.
+- **`get_pipeline_metrics` and `watch_device` do not degrade.** Both read the hot path directly and neither has an archive equivalent, so a Redis outage leaves them unavailable while device reads keep serving `stale` data. Serving fleet counters from Prometheus instead would close the first of these.
 - **The user a device reports is self-attested.** Device identity is pinned to the certificate CN and pod identity is stamped by ingest, but `user_id` arrives in the batch body, so a device holding a valid certificate can attribute its telemetry to another tenant. Closing this needs a device-to-user binding at ingest — a registry lookup or a claim in the certificate — and no such source exists yet. Treat the ingest write path as trusted-network until it does. The identifier delimiters that build correlation keys (`{`, `}`, `:`) are part of the same boundary: a user id containing them can collide with another key's string, so a deployment that also binds users should reject them at the edge.
 - The fencing lock is implemented and tested, but **no feature consumes it yet** — device ownership reassignment and quarantine are unbuilt.
 - Grafana and Prometheus **provisioning** is not built. The dashboard and rules validate and every metric name they reference was cross-checked against a live scrape, but neither has been loaded into a running Grafana here.

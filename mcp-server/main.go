@@ -49,12 +49,16 @@ func main() {
 	var staticTokens string
 	var requireAuth bool
 	var allowAnonymous bool
+	var maxWatches int
+	var sessionTTL time.Duration
 	var tlsCert, tlsKey, clientCA string
 	flag.BoolVar(&headless, "headless", false, "run the pipeline without the stdio MCP server, for deployment as an aggregator or persister")
 	flag.StringVar(&healthAddr, "health-addr", ":8080", "address serving /healthz when headless")
 	flag.StringVar(&httpAddr, "http-addr", "", "serve MCP over streamable HTTP on this address instead of stdio")
 	flag.BoolVar(&requireAuth, "require-auth", true, "require a bearer token on the HTTP transport")
 	flag.BoolVar(&allowAnonymous, "allow-anonymous-http", false, "serve the HTTP transport with no authentication; every tool then reads every tenant")
+	flag.IntVar(&maxWatches, "max-watches", mcpserver.DefaultMaxWatches, "ceiling on concurrent watch_device calls; each one holds a subscription for up to five minutes")
+	flag.DurationVar(&sessionTTL, "mcp-session-ttl", mcpserver.DefaultSessionTTL, "close an MCP session that has been idle for this long")
 	flag.StringVar(&staticTokens, "tokens", os.Getenv("IRONCLAW_MCP_TOKENS"), "static bearer tokens as token:user[:scope|scope], comma separated")
 	flag.StringVar(&tlsCert, "tls-cert", os.Getenv("IRONCLAW_MCP_CERT"), "server certificate for the HTTP transport")
 	flag.StringVar(&tlsKey, "tls-key", os.Getenv("IRONCLAW_MCP_KEY"), "server key for the HTTP transport")
@@ -71,6 +75,8 @@ func main() {
 		tlsCert:        tlsCert,
 		tlsKey:         tlsKey,
 		clientCA:       clientCA,
+		maxWatches:     maxWatches,
+		sessionTTL:     sessionTTL,
 	}
 
 	if err := run(config, serve); err != nil {
@@ -88,6 +94,8 @@ type serveOptions struct {
 	tlsCert        string
 	tlsKey         string
 	clientCA       string
+	maxWatches     int
+	sessionTTL     time.Duration
 }
 
 func run(config app.Config, serve serveOptions) error {
@@ -121,6 +129,7 @@ func run(config app.Config, serve serveOptions) error {
 		Commands:    runtime.Commands(),
 		Watcher:     state,
 		RequireAuth: serve.httpAddr != "" && serve.requireAuth,
+		MaxWatches:  serve.maxWatches,
 	})
 	if err != nil {
 		return err
@@ -180,6 +189,7 @@ func serveHTTP(ctx context.Context, tools *mcpserver.Tools, serve serveOptions, 
 		CertFile:     serve.tlsCert,
 		KeyFile:      serve.tlsKey,
 		ClientCAFile: serve.clientCA,
+		SessionTTL:   serve.sessionTTL,
 	}
 
 	if !serve.requireAuth && !serve.allowAnonymous {

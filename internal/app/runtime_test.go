@@ -79,7 +79,7 @@ func TestRuntimeFeedsReadableStateThroughEveryStage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(devices) == 0 {
+	if len(devices.Devices) == 0 {
 		t.Fatal("no devices were registered for user-000")
 	}
 }

@@ -178,7 +178,7 @@ func TestUserDevicesIsScopedAndSorted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(devices) != 2 || devices[0] != "device-a" || devices[1] != "device-b" {
+	if len(devices.Devices) != 2 || devices.Devices[0] != "device-a" || devices.Devices[1] != "device-b" {
 		t.Fatalf("user-1 devices %v, want sorted [device-a device-b]", devices)
 	}
 }

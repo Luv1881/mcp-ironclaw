@@ -14,7 +14,7 @@ import (
 
 var (
 	ErrNilClient      = errors.New("redisstore: client is nil")
-	ErrDeviceNotFound = errors.New("redisstore: device not found")
+	ErrDeviceNotFound = fmt.Errorf("redisstore: %w", domain.ErrDeviceNotFound)
 )
 
 const (
@@ -231,13 +231,13 @@ func (s *Store) DeviceState(ctx context.Context, userID, deviceID string) (domai
 	return state, nil
 }
 
-func (s *Store) UserDevices(ctx context.Context, userID string) ([]string, error) {
+func (s *Store) UserDevices(ctx context.Context, userID string) (domain.DeviceListing, error) {
 	devices, err := s.client.SMembers(ctx, s.devicesKey(userID)).Result()
 	if err != nil {
-		return nil, fmt.Errorf("redisstore: listing devices: %w", err)
+		return domain.DeviceListing{}, fmt.Errorf("redisstore: listing devices: %w", err)
 	}
 	sort.Strings(devices)
-	return devices, nil
+	return domain.DeviceListing{Devices: devices}, nil
 }
 
 func (s *Store) PipelineMetrics(ctx context.Context) (map[string]int64, error) {

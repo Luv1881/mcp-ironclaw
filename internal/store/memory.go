@@ -2,14 +2,14 @@ package store
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"sort"
 	"sync"
 
 	"github.com/ironclaw/mcp-ironclaw/internal/domain"
 )
 
-var ErrDeviceNotFound = errors.New("store: device not found")
+var ErrDeviceNotFound = fmt.Errorf("store: %w", domain.ErrDeviceNotFound)
 
 const (
 	MetricWindowsApplied   = "windows_applied"
@@ -159,9 +159,9 @@ func (m *Memory) DeviceState(ctx context.Context, userID, deviceID string) (doma
 	return record.state, nil
 }
 
-func (m *Memory) UserDevices(ctx context.Context, userID string) ([]string, error) {
+func (m *Memory) UserDevices(ctx context.Context, userID string) (domain.DeviceListing, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return domain.DeviceListing{}, err
 	}
 
 	m.mu.RLock()
@@ -173,7 +173,7 @@ func (m *Memory) UserDevices(ctx context.Context, userID string) ([]string, erro
 	}
 	sort.Strings(devices)
 
-	return devices, nil
+	return domain.DeviceListing{Devices: devices}, nil
 }
 
 func (m *Memory) PipelineMetrics(ctx context.Context) (map[string]int64, error) {

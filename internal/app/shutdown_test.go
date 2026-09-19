@@ -122,3 +122,21 @@ func TestHandlerLoggerToleratesMissingDependencies(t *testing.T) {
 	empty := handlerErrorLogger(&Dependencies{})
 	empty("ironclaw.events.raw", 1, errors.New("boom"))
 }
+
+func TestCloseAllToleratesAPartiallyBuiltDependencySet(t *testing.T) {
+	order := make([]string, 0, 2)
+
+	deps := &Dependencies{
+		Extra: []func(){
+			func() { order = append(order, "release") },
+			nil,
+		},
+		Windows: &recordingChannel{name: "windows", order: &order},
+	}
+
+	deps.closeAll()
+
+	if got := strings.Join(order, ","); got != "release,windows" {
+		t.Fatalf("release order %q, want the populated resources closed and the empty ones skipped", got)
+	}
+}

@@ -122,6 +122,35 @@ for raw in open(sys.argv[1]):
         if tools is not None:
             print(" ".join(sorted(tool["name"] for tool in tools)))
             sys.exit(0)
+    elif selector == "readonlytools":
+        tools = message.get("result", {}).get("tools")
+        if tools is not None:
+            names = [
+                tool["name"]
+                for tool in tools
+                if (tool.get("annotations") or {}).get("readOnlyHint")
+            ]
+            print(" ".join(sorted(names)))
+            sys.exit(0)
+    elif selector == "destructivetools":
+        tools = message.get("result", {}).get("tools")
+        if tools is not None:
+            names = [
+                tool["name"]
+                for tool in tools
+                if (tool.get("annotations") or {}).get("destructiveHint")
+            ]
+            print(" ".join(sorted(names)))
+            sys.exit(0)
+    elif selector == "capabilities":
+        capabilities = message.get("result", {}).get("capabilities") or {}
+        print(" ".join(sorted(capabilities)))
+        sys.exit(0)
+    elif selector == "instructions":
+        text = message.get("result", {}).get("instructions") or ""
+        if text.strip():
+            print(text.strip().splitlines()[0])
+            sys.exit(0)
     elif selector == "ok":
         result = message.get("result")
         if result is not None and not result.get("isError"):
@@ -229,6 +258,67 @@ for expected in get_device_state get_user_devices get_pipeline_metrics watch_dev
     bad "tool missing from the catalogue: $expected"
   fi
 done
+
+note "Tool annotations (a host decides how much to trust a call from these)"
+
+readonly_tools="$(rpc readonlytools || true)"
+for expected in get_device_state get_user_devices get_pipeline_metrics watch_device; do
+  if echo "$readonly_tools" | grep -qw "$expected"; then
+    ok "$expected declares readOnlyHint"
+  else
+    bad "$expected does not declare readOnlyHint"
+  fi
+done
+
+if echo "$readonly_tools" | grep -qw reset_device_counters; then
+  bad "reset_device_counters declares readOnlyHint but it publishes a state-changing command"
+else
+  ok "reset_device_counters does not claim to be read-only"
+fi
+
+destructive_tools="$(rpc destructivetools || true)"
+if echo "$destructive_tools" | grep -qw reset_device_counters; then
+  ok "reset_device_counters declares destructiveHint"
+else
+  bad "reset_device_counters zeroes accumulated counters without declaring destructiveHint"
+fi
+
+note "Server capabilities and instructions"
+
+capabilities="$(mcp "$ADMIN_TOKEN" '{"jsonrpc":"2.0","id":9,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}' >/dev/null; rpc capabilities || true)"
+if echo "$capabilities" | grep -qw tools; then
+  ok "the server advertises the tools capability"
+else
+  bad "the server does not advertise tools (advertised: ${capabilities:-none})"
+fi
+
+if echo "$capabilities" | grep -qw logging; then
+  bad "the server advertises logging but never emits a log notification"
+else
+  ok "the server does not advertise capabilities it does not implement"
+fi
+
+instructions="$(mcp "$ADMIN_TOKEN" "$INIT" >/dev/null; rpc instructions || true)"
+if [ -n "$instructions" ]; then
+  ok "the server advertises usage instructions to the host"
+else
+  bad "the server advertises no instructions"
+fi
+
+note "Cross-origin refusal"
+
+crossorigin="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 \
+  -X POST "https://$HOST:$PORT$MCP_PATH" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H 'Origin: https://attacker.example' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  --data "$INIT")"
+if [ "$crossorigin" = "200" ]; then
+  bad "a cross-origin request was served; a page the operator visits could drive this endpoint"
+else
+  ok "a cross-origin request is refused ($crossorigin)"
+fi
 
 note "Tool invocation over the authenticated HTTPS path"
 

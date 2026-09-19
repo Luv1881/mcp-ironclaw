@@ -19,6 +19,11 @@ var (
 	ErrWritesDisabled   = errors.New("mcpserver: command publishing is not configured")
 	ErrNilDeviceWatcher = errors.New("mcpserver: device watcher is not configured")
 	ErrWatchClosed      = errors.New("mcpserver: device watch closed before an update arrived")
+
+	ErrDeviceNotFound    = errors.New("mcpserver: no such device")
+	ErrIdentifierTooLong = errors.New("mcpserver: identifier exceeds the maximum length")
+	ErrIdentifierInvalid = errors.New("mcpserver: identifier contains a control character")
+	ErrTooManyWatches    = errors.New("mcpserver: too many concurrent device watches on this server; retry shortly")
 )
 
 type DeviceStateInput struct {
@@ -41,12 +46,15 @@ type DeviceStateOutput struct {
 
 type UserDevicesInput struct {
 	UserID string `json:"user_id"`
+	Limit  int    `json:"limit,omitempty"`
 }
 
 type UserDevicesOutput struct {
-	UserID  string   `json:"user_id"`
-	Devices []string `json:"devices"`
-	Count   int      `json:"count"`
+	UserID    string   `json:"user_id"`
+	Devices   []string `json:"devices"`
+	Count     int      `json:"count"`
+	Truncated bool     `json:"truncated"`
+	Stale     bool     `json:"stale"`
 }
 
 type PipelineMetricsInput struct{}
@@ -58,6 +66,11 @@ type PipelineMetricsOutput struct {
 const (
 	DefaultWatchTimeout = 30 * time.Second
 	MaxWatchTimeout     = 5 * time.Minute
+
+	DefaultDeviceLimit = 500
+	MaxDeviceLimit     = 5000
+	MaxIdentifierBytes = 256
+	DefaultMaxWatches  = 64
 )
 
 type WatchDeviceInput struct {
@@ -94,6 +107,7 @@ type Tools struct {
 	watcher     domain.DeviceWatcher
 	clock       domain.Clock
 	requireAuth bool
+	watchSlots  chan struct{}
 }
 
 type Options struct {
@@ -104,6 +118,7 @@ type Options struct {
 	Watcher     domain.DeviceWatcher
 	Clock       domain.Clock
 	RequireAuth bool
+	MaxWatches  int
 }
 
 type systemClock struct{}
@@ -118,6 +133,10 @@ func NewTools(options Options) (*Tools, error) {
 	if clock == nil {
 		clock = systemClock{}
 	}
+	watches := options.MaxWatches
+	if watches <= 0 {
+		watches = DefaultMaxWatches
+	}
 	return &Tools{
 		state:       options.State,
 		devices:     options.Devices,
@@ -126,7 +145,27 @@ func NewTools(options Options) (*Tools, error) {
 		watcher:     options.Watcher,
 		clock:       clock,
 		requireAuth: options.RequireAuth,
+		watchSlots:  make(chan struct{}, watches),
 	}, nil
+}
+
+func validateIdentifier(name, value string) error {
+	if len(value) > MaxIdentifierBytes {
+		return fmt.Errorf("%w: %s is %d bytes, limit is %d", ErrIdentifierTooLong, name, len(value), MaxIdentifierBytes)
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("%w: %s", ErrIdentifierInvalid, name)
+		}
+	}
+	return nil
+}
+
+func translateReadError(err error) error {
+	if errors.Is(err, domain.ErrDeviceNotFound) {
+		return domain.ErrDeviceNotFound
+	}
+	return err
 }
 
 func (t *Tools) DeviceState(ctx context.Context, input DeviceStateInput) (DeviceStateOutput, error) {
@@ -136,13 +175,19 @@ func (t *Tools) DeviceState(ctx context.Context, input DeviceStateInput) (Device
 	if input.DeviceID == "" {
 		return DeviceStateOutput{}, ErrMissingDevice
 	}
+	if err := validateIdentifier("user_id", input.UserID); err != nil {
+		return DeviceStateOutput{}, err
+	}
+	if err := validateIdentifier("device_id", input.DeviceID); err != nil {
+		return DeviceStateOutput{}, err
+	}
 	if err := t.authorise(ctx, input.UserID); err != nil {
 		return DeviceStateOutput{}, err
 	}
 
 	state, err := t.state.DeviceState(ctx, input.UserID, input.DeviceID)
 	if err != nil {
-		return DeviceStateOutput{}, err
+		return DeviceStateOutput{}, translateReadError(err)
 	}
 
 	return stateOutput(state), nil
@@ -172,6 +217,9 @@ func (t *Tools) UserDevices(ctx context.Context, input UserDevicesInput) (UserDe
 	if input.UserID == "" {
 		return UserDevicesOutput{}, ErrMissingUserID
 	}
+	if err := validateIdentifier("user_id", input.UserID); err != nil {
+		return UserDevicesOutput{}, err
+	}
 	if t.devices == nil {
 		return UserDevicesOutput{}, ErrNilDeviceLister
 	}
@@ -179,12 +227,36 @@ func (t *Tools) UserDevices(ctx context.Context, input UserDevicesInput) (UserDe
 		return UserDevicesOutput{}, err
 	}
 
-	devices, err := t.devices.UserDevices(ctx, input.UserID)
+	listing, err := t.devices.UserDevices(ctx, input.UserID)
 	if err != nil {
 		return UserDevicesOutput{}, err
 	}
 
-	return UserDevicesOutput{UserID: input.UserID, Devices: devices, Count: len(devices)}, nil
+	devices, truncated := capDevices(listing.Devices, input.Limit)
+
+	return UserDevicesOutput{
+		UserID:    input.UserID,
+		Devices:   devices,
+		Count:     len(devices),
+		Truncated: truncated,
+		Stale:     listing.Stale,
+	}, nil
+}
+
+func capDevices(devices []string, requested int) ([]string, bool) {
+	limit := requested
+	if limit <= 0 {
+		limit = DefaultDeviceLimit
+	}
+	if limit > MaxDeviceLimit {
+		limit = MaxDeviceLimit
+	}
+
+	if len(devices) <= limit {
+		return devices, false
+	}
+
+	return devices[:limit], true
 }
 
 func (t *Tools) PipelineMetrics(ctx context.Context, _ PipelineMetricsInput) (PipelineMetricsOutput, error) {
@@ -219,6 +291,15 @@ func (t *Tools) ResetCounters(ctx context.Context, input ResetCountersInput) (Re
 	}
 	if input.Actor == "" {
 		return ResetCountersOutput{}, ErrMissingActor
+	}
+	if err := validateIdentifier("user_id", input.UserID); err != nil {
+		return ResetCountersOutput{}, err
+	}
+	if err := validateIdentifier("device_id", input.DeviceID); err != nil {
+		return ResetCountersOutput{}, err
+	}
+	if err := validateIdentifier("actor", input.Actor); err != nil {
+		return ResetCountersOutput{}, err
 	}
 	if err := t.authorise(ctx, input.UserID); err != nil {
 		return ResetCountersOutput{}, err
@@ -263,8 +344,21 @@ func (t *Tools) WatchDevice(ctx context.Context, input WatchDeviceInput) (WatchD
 	if t.watcher == nil {
 		return WatchDeviceOutput{}, ErrNilDeviceWatcher
 	}
+	if err := validateIdentifier("user_id", input.UserID); err != nil {
+		return WatchDeviceOutput{}, err
+	}
+	if err := validateIdentifier("device_id", input.DeviceID); err != nil {
+		return WatchDeviceOutput{}, err
+	}
 	if err := t.authorise(ctx, input.UserID); err != nil {
 		return WatchDeviceOutput{}, err
+	}
+
+	select {
+	case t.watchSlots <- struct{}{}:
+		defer func() { <-t.watchSlots }()
+	default:
+		return WatchDeviceOutput{}, ErrTooManyWatches
 	}
 
 	wait := time.Duration(input.TimeoutSeconds) * time.Second

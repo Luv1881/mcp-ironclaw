@@ -1,9 +1,12 @@
 package domain
 
 import (
+	"errors"
 	"strconv"
 	"time"
 )
+
+var ErrDeviceNotFound = errors.New("no such device")
 
 type CorrelationKey struct {
 	UserID    string

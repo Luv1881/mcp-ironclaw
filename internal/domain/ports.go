@@ -42,8 +42,13 @@ type DeviceStateReader interface {
 	DeviceState(ctx context.Context, userID, deviceID string) (DeviceState, error)
 }
 
+type DeviceListing struct {
+	Devices []string
+	Stale   bool
+}
+
 type UserDeviceLister interface {
-	UserDevices(ctx context.Context, userID string) ([]string, error)
+	UserDevices(ctx context.Context, userID string) (DeviceListing, error)
 }
 
 type StateReader interface {

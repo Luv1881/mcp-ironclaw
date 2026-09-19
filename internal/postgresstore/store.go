@@ -15,7 +15,7 @@ import (
 
 var (
 	ErrNilPool        = errors.New("postgresstore: pool is nil")
-	ErrDeviceNotFound = errors.New("postgresstore: device not found")
+	ErrDeviceNotFound = fmt.Errorf("postgresstore: %w", domain.ErrDeviceNotFound)
 )
 
 const schema = `
@@ -186,10 +186,10 @@ func (s *Store) DeviceState(ctx context.Context, userID, deviceID string) (domai
 	return state, nil
 }
 
-func (s *Store) UserDevices(ctx context.Context, userID string) ([]string, error) {
+func (s *Store) UserDevices(ctx context.Context, userID string) (domain.DeviceListing, error) {
 	rows, err := s.pool.Query(ctx, selectUserDevices, userID)
 	if err != nil {
-		return nil, fmt.Errorf("postgresstore: listing devices: %w", err)
+		return domain.DeviceListing{}, fmt.Errorf("postgresstore: listing devices: %w", err)
 	}
 	defer rows.Close()
 
@@ -197,12 +197,12 @@ func (s *Store) UserDevices(ctx context.Context, userID string) ([]string, error
 	for rows.Next() {
 		var deviceID string
 		if err := rows.Scan(&deviceID); err != nil {
-			return nil, fmt.Errorf("postgresstore: scanning device: %w", err)
+			return domain.DeviceListing{}, fmt.Errorf("postgresstore: scanning device: %w", err)
 		}
 		devices = append(devices, deviceID)
 	}
 
-	return devices, rows.Err()
+	return domain.DeviceListing{Devices: devices}, rows.Err()
 }
 
 func (s *Store) ResetDevice(ctx context.Context, userID, deviceID string) error {

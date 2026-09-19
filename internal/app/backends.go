@@ -130,14 +130,22 @@ type Dependencies struct {
 
 func (d *Dependencies) closeAll() {
 	for _, release := range d.Extra {
-		release()
+		if release != nil {
+			release()
+		}
 	}
-	d.Batches.Close()
-	d.Windows.Close()
+	if d.Batches != nil {
+		d.Batches.Close()
+	}
+	if d.Windows != nil {
+		d.Windows.Close()
+	}
 	if d.ArchiveWindows != nil {
 		d.ArchiveWindows.Close()
 	}
-	d.Commands.Close()
+	if d.Commands != nil {
+		d.Commands.Close()
+	}
 }
 
 func buildDependencies(ctx context.Context, config Config) (*Dependencies, error) {
@@ -231,6 +239,7 @@ func buildState(ctx context.Context, config Config, deps *Dependencies) error {
 	}
 
 	deps.Archive = archive
+	deps.State = newFallbackState(deps.State, archive)
 	deps.Extra = append(deps.Extra, pool.Close)
 	deps.Describing = "redis+postgres"
 
