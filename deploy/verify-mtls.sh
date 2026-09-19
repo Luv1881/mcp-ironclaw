@@ -41,13 +41,18 @@ $DOCKER run -d --name "$CONTAINER" --user root -p "$PORT:443" \
     "$IMAGE" >/dev/null
 
 handshake() {
+    # A black-holed endpoint accepts the TCP connection and then never answers,
+    # so this needs its own deadline: without one the readiness gate below can
+    # never run and the script hangs instead of reporting that nothing answered.
     printf 'GET /healthz HTTP/1.1\r\nHost: edge.ironclaw.internal\r\nConnection: close\r\n\r\n' \
-        | openssl s_client -connect "127.0.0.1:$PORT" -servername edge.ironclaw.internal \
+        | timeout "${HANDSHAKE_TIMEOUT:-5}" openssl s_client -connect "127.0.0.1:$PORT" \
+            -servername edge.ironclaw.internal \
             -CAfile "$PKI/ca.crt" -quiet "$@" 2>&1 || true
 }
 
 ready=0
-for _ in $(seq 1 80); do
+ready_deadline=$((SECONDS + ${READY_BUDGET:-30}))
+while [ "$SECONDS" -lt "$ready_deadline" ]; do
     if grep -qa "HTTP/1" <<<"$(handshake -cert "$PKI/device-000.crt" -key "$PKI/device-000.key")"; then
         ready=1
         break
@@ -56,7 +61,7 @@ for _ in $(seq 1 80); do
 done
 
 if [ "$ready" -ne 1 ]; then
-    echo "edge never completed a TLS handshake on port $PORT; an unreachable listener would look like a policy rejection, so refusing to report results" >&2
+    echo "edge never completed a TLS handshake on port $PORT within ${READY_BUDGET:-30}s; an unreachable listener would look like a policy rejection, so refusing to report results" >&2
     $DOCKER logs "$CONTAINER" 2>&1 | tail -20 >&2
     exit 1
 fi

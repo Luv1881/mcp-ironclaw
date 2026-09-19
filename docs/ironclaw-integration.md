@@ -85,6 +85,17 @@ This starts the server as the manifest describes it and asserts 28 properties, i
 
 Assertions read the JSON-RPC result, never the HTTP status alone. An MCP tool error arrives inside a `200` response, so a status-only check reports success while the call is in fact failing — which is exactly how the first version of this script produced false passes.
 
+## Running the verification on a machine with a restrictive firewall
+
+Both verification scripts complete a real TLS handshake before scoring anything, and both now carry deadlines: `verify-mtls.sh` bounds each handshake and the whole readiness window, `verify-edge-path.sh` bounds each request and its readiness window. Without those, a host whose firewall accepts a TCP connection and then black-holes it makes the script *hang* instead of printing the diagnostic it was written to print. On such a host the correct output is a refusal to report results, not a pass and not a rejection:
+
+```
+edge never completed a TLS handshake on port 8443 within 30s; an unreachable listener
+would look like a policy rejection, so refusing to report results
+```
+
+`READY_BUDGET`, `REQUEST_TIMEOUT` and `HANDSHAKE_TIMEOUT` adjust the windows.
+
 ## What has been verified, and what has not
 
 **Verified:** the manifest parses under IronClaw's own `ExtensionManifestRecord::from_toml` — its real v3 parser, compiled from source, not a reimplementation. Two negative controls confirm the test discriminates: downgrading `server` to `http://` is refused, and a `namespace` that disagrees with `id` is refused. The server side is verified by `make ironclaw-verify` as described above.

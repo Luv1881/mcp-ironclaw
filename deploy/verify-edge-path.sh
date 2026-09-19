@@ -43,7 +43,10 @@ $DOCKER run -d --name ironclaw-edgecheck-edge --user root --network "$NETWORK" -
 post() {
     local device="$1" body="$2"
     shift 2
-    curl -sS -o /dev/null -w '%{http_code}' \
+    # A black-holed endpoint accepts the TCP connection and then never answers
+    # the handshake, so without a deadline every call here blocks forever and the
+    # readiness gate below can never run.
+    curl -sS -o /dev/null -w '%{http_code}' --max-time "${REQUEST_TIMEOUT:-10}" \
         --cert "$PKI/$device.crt" --key "$PKI/$device.key" --cacert "$PKI/ca.crt" \
         --resolve "edge.ironclaw.internal:$PORT:127.0.0.1" \
         -X POST -H 'Content-Type: application/json' "$@" \
@@ -55,7 +58,8 @@ event() {
 }
 
 ready=0
-for _ in $(seq 1 80); do
+ready_deadline=$((SECONDS + ${READY_BUDGET:-40}))
+while [ "$SECONDS" -lt "$ready_deadline" ]; do
     if [ "$(post "$DEVICE" "{\"events\":[$(event 1)]}")" = "202" ]; then
         ready=1
         break
@@ -64,7 +68,7 @@ for _ in $(seq 1 80); do
 done
 
 if [ "$ready" -ne 1 ]; then
-    echo "edge path never accepted a batch; refusing to report results" >&2
+    echo "edge path never accepted a batch within ${READY_BUDGET:-40}s; refusing to report results" >&2
     $DOCKER logs ironclaw-edgecheck-edge 2>&1 | tail -10 >&2
     $DOCKER logs ironclaw-edgecheck-ingest 2>&1 | tail -10 >&2
     exit 1
@@ -89,13 +93,13 @@ assert "body device_id claiming another device is refused" 403 \
 assert "client supplied X-Device-Id does not survive the edge" 202 \
     "$(post "$DEVICE" "{\"device_id\":\"$DEVICE\",\"events\":[$(event 4)]}" -H 'X-Device-Id: device-000')"
 
-anonymous=$(curl -sS -o /dev/null -w '%{http_code}' --cacert "$PKI/ca.crt" \
+anonymous=$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${REQUEST_TIMEOUT:-10}" --cacert "$PKI/ca.crt" \
     --resolve "edge.ironclaw.internal:$PORT:127.0.0.1" -X POST -d '{}' \
     "https://edge.ironclaw.internal:$PORT/v1/batches" 2>/dev/null) || true
 
 assert "connection without a client certificate is refused" 000 "${anonymous:-000}"
 
-bypass=$(curl -sS -o /dev/null -w '%{http_code}' \
+bypass=$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${REQUEST_TIMEOUT:-10}" \
     --cert "$PKI/device-000.crt" --key "$PKI/device-000.key" --cacert "$PKI/ca.crt" \
     --resolve "ingest.ironclaw.internal:$INGEST_PORT:127.0.0.1" \
     -X POST -H 'Content-Type: application/json' -H "X-Device-Id: device-017" \
